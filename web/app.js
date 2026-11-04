@@ -189,7 +189,8 @@ function buildRequest() {
     coord_display: $("#coord_display").value,
     trees: $("#trees").checked,
     tree_height_m: num("tree_height"),
-    tree_clearance_m: num("tree_clearance"),
+    tree_clearance_a_m: num("tree_clearance_a"),
+    tree_clearance_b_m: num("tree_clearance_b"),
   };
   Object.keys(options).forEach((k) => options[k] === undefined && delete options[k]);
   return { site_a: readSite("site_a"), site_b: readSite("site_b"), options, format: "json" };
@@ -277,7 +278,7 @@ function showResult(data, units) {
       const tc = t.min_clearance === null ? "n/a"
         : `${t.min_clearance.toFixed(2)} \u00d7 r1 (${gapText(t.min_clearance_m, "tree tops")}) at ${dfmt(t.min_clearance_d_m, 2)}`;
       rows.push(["Min clearance over trees",
-        `<span class="badge ${t.status}">${t.status}</span> ${tc}<br><small>${hfmt(t.height_m)} trees, ignored within ${dfmt(t.clearance_m)} of each site</small>`]);
+        `<span class="badge ${t.status}">${t.status}</span> ${tc}<br><small>${hfmt(t.height_m)} trees, ignored within ${dfmt(t.clearance_a_m)} of ${esc(a.name)} and ${dfmt(t.clearance_b_m)} of ${esc(b.name)}</small>`]);
     }
   }
   rows.push(["Elevation source", esc(r.elevation_sources.join(", ") || "none")]);
@@ -464,8 +465,14 @@ function init() {
   $("#terrain_check").addEventListener("change", updateLookupHint);
   $("#units").addEventListener("change", updateUnitLabels);
   $("#trees").addEventListener("change", (e) => {
-    $("#tree_height").disabled = $("#tree_clearance").disabled = !e.target.checked;
+    for (const id of ["#tree_height", "#tree_clearance_a", "#tree_clearance_b"]) $(id).disabled = !e.target.checked;
   });
+  for (const key of ["site_a", "site_b"]) {
+    const nameInput = $("input[name=name]", siteFieldset(key));
+    const sync = () => { $(`.site-name[data-site=${key}]`).textContent = nameInput.value.trim() || (key === "site_a" ? "Site A" : "Site B"); };
+    nameInput.addEventListener("input", sync);
+    sync();
+  }
   updateUnitLabels();
   $("#link-form").addEventListener("submit", submit);
   $("#download").addEventListener("click", download);

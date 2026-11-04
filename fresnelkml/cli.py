@@ -55,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="tree height (default 100 ft / 30.5 m, in --units)")
     p.add_argument("--tree-clearance", type=float, default=None,
                    help="ignore trees this close to either site (default 50 ft / 15.2 m, in --units)")
+    p.add_argument("--tree-clearance-a", type=float, default=None,
+                   help="ignore trees this close to site A (overrides --tree-clearance)")
+    p.add_argument("--tree-clearance-b", type=float, default=None,
+                   help="ignore trees this close to site B (overrides --tree-clearance)")
     p.add_argument("--config", help="server-style config file with the elevation chain")
     p.add_argument("--elev-provider", choices=PROVIDER_CHOICES, action=_ChainAction, dest="provider",
                    help="add a provider to a one-off elevation chain (repeatable, in order)")
@@ -142,8 +146,9 @@ def summary(report: LinkReport) -> str:
                 f"{report.min_tree_clearance:.2f} x r1 ({fmt_gap(report.min_tree_clearance_m, u, 'tree tops')}) "
                 f"at {fmt_distance(report.min_tree_clearance_d_m, u, 2)}")
             lines.append(f"  Tree check ({fmt_height(opt.tree_height_m, u)} trees, ignored within "
-                         f"{fmt_distance(opt.tree_clearance_m, u)} of each site): {report.tree_status}, "
-                         f"min clearance over trees {t}")
+                         f"{fmt_distance(opt.tree_clearance_a_m, u)} of {report.site_a.name} and "
+                         f"{fmt_distance(opt.tree_clearance_b_m, u)} of {report.site_b.name}): "
+                         f"{report.tree_status}, min clearance over trees {t}")
         if report.obstructions:
             h = 1 / FEET if u == "ft" else 1.0
             dist_unit, dist_scale = ("mi", 1 / MILE) if u == "ft" else ("km", 1 / 1000)
@@ -188,8 +193,10 @@ def main(argv=None, env=None) -> int:
         scale = FEET if args.units == "ft" else 1.0
         if args.tree_height is not None:
             opt.tree_height_m = args.tree_height * scale
-        if args.tree_clearance is not None:
-            opt.tree_clearance_m = args.tree_clearance * scale
+        for attr, own in (("tree_clearance_a_m", args.tree_clearance_a), ("tree_clearance_b_m", args.tree_clearance_b)):
+            value = own if own is not None else args.tree_clearance
+            if value is not None:
+                setattr(opt, attr, value * scale)
         run_env = dict(env)
         if args.google_key:
             run_env["GOOGLE_ELEVATION_KEY"] = args.google_key

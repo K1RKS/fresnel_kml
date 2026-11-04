@@ -108,8 +108,9 @@ def _link_description(report: LinkReport) -> str:
             trees = (f"{report.min_tree_clearance:.2f} \u00d7 r1 ({fmt_gap(report.min_tree_clearance_m, u, 'tree tops')})"
                      f" at {fmt_distance(report.min_tree_clearance_d_m, u, 2)}")
         lines += [
-            f"Trees: {fmt_height(opt.tree_height_m, u)} tall, ignored within {fmt_distance(opt.tree_clearance_m, u)} "
-            "of each site",
+            f"Trees: {fmt_height(opt.tree_height_m, u)} tall, ignored within "
+            f"{fmt_distance(opt.tree_clearance_a_m, u)} of {html.escape(report.site_a.name)} and "
+            f"{fmt_distance(opt.tree_clearance_b_m, u)} of {html.escape(report.site_b.name)}",
             f"Min clearance over trees: {trees}",
             f"Tree status: {report.tree_status}",
         ]

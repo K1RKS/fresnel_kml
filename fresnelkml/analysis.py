@@ -60,7 +60,8 @@ class Options:
     units: str = "m"  # display units for heights and distances; inputs are converted to metres before this
     trees: bool = False
     tree_height_m: float = 100 * 0.3048
-    tree_clearance_m: float = 50 * 0.3048  # trees are ignored this far from each site
+    tree_clearance_a_m: float = 50 * 0.3048  # trees are ignored this far from site A
+    tree_clearance_b_m: float = 50 * 0.3048  # and this far from site B
 
 
 @dataclass
@@ -180,7 +181,8 @@ class LinkReport:
             "trees": {
                 "enabled": self.trees_checked,
                 "height_m": _r(self.options.tree_height_m),
-                "clearance_m": _r(self.options.tree_clearance_m),
+                "clearance_a_m": _r(self.options.tree_clearance_a_m),
+                "clearance_b_m": _r(self.options.tree_clearance_b_m),
                 "min_clearance": None if self.min_tree_clearance is None else round(self.min_tree_clearance, 3),
                 "min_clearance_d_m": _r(self.min_tree_clearance_d_m),
                 "min_clearance_m": _r(self.min_tree_clearance_m),
@@ -260,7 +262,9 @@ def validate_options(opt: Options) -> None:
         ("trees", isinstance(opt.trees, bool), "must be true or false"),
         ("tree_height_m", _finite(opt.tree_height_m) and 0 <= opt.tree_height_m <= 150,
          "must be between 0 and 150 m (about 490 ft)"),
-        ("tree_clearance_m", _finite(opt.tree_clearance_m) and 0 <= opt.tree_clearance_m <= 50_000,
+        ("tree_clearance_a_m", _finite(opt.tree_clearance_a_m) and 0 <= opt.tree_clearance_a_m <= 50_000,
+         "must be between 0 and 50 km"),
+        ("tree_clearance_b_m", _finite(opt.tree_clearance_b_m) and 0 <= opt.tree_clearance_b_m <= 50_000,
          "must be between 0 and 50 km"),
         ("terrain_check", opt.terrain_check in (None, True, False), "must be true, false or null"),
         ("sixty", isinstance(opt.sixty, bool), "must be true or false"),
@@ -448,7 +452,7 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
 
         if opt.trees:
             report.trees_checked = True
-            start, stop = opt.tree_clearance_m, distance - opt.tree_clearance_m
+            start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
             for p in report.profile + report.profile_a + report.profile_b:
                 if start <= p.d_m <= stop:
                     p.tree_top_m = p.effective_m + opt.tree_height_m
@@ -461,7 +465,7 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
                 report.min_tree_clearance_d_m = worst.d_m
                 report.min_tree_clearance_m = worst.los_m - worst.tree_top_m
             else:
-                warnings.append("No part of the path is far enough from both sites for the tree check.")
+                warnings.append("No part of the path is outside both tree clearances, so trees weren't checked.")
             report.tree_status = clearance_status(report.min_tree_clearance)
 
     sources = [r.ground_source for r in (ra, rb) if r.ground_source]

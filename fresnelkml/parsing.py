@@ -13,7 +13,7 @@ from .units import FEET
 
 SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m"}
 REQUEST_KEYS = {"site_a", "site_b", "options", "format"}
-OPTION_KEYS = {f.name for f in fields(Options)} | {"units"}
+OPTION_KEYS = {f.name for f in fields(Options)} | {"units", "tree_clearance_m"}
 IGNORED_OPTION_KEYS = {"google_key"}
 
 
@@ -132,8 +132,12 @@ def parse_options_dict(data) -> tuple[Options, str, list[str]]:
         warnings.append("options.google_key is ignored; the server's own key is used.")
     units = _units(data.get("units", "m"))
     opt = Options()
-    numbers = ("freq_ghz", "k", "clutter_m", "tree_height_m", "tree_clearance_m")
-    lengths = ("clutter_m", "tree_height_m", "tree_clearance_m")  # given in feet when units is "ft"
+    if data.get("tree_clearance_m") is not None:  # shorthand for the same clearance at both sites
+        given = {k: v for k, v in data.items() if k != "tree_clearance_m"}
+        data = {**given, **{k: data["tree_clearance_m"] for k in ("tree_clearance_a_m", "tree_clearance_b_m")
+                            if given.get(k) is None}}
+    numbers = ("freq_ghz", "k", "clutter_m", "tree_height_m", "tree_clearance_a_m", "tree_clearance_b_m")
+    lengths = ("clutter_m", "tree_height_m", "tree_clearance_a_m", "tree_clearance_b_m")  # feet when units is "ft"
     integers = ("zone", "stations", "ring_points", "ring_every")
     strings = ("elev_source", "style", "mode", "color", "coord_display")
     for key in numbers:
