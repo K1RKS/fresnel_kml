@@ -34,6 +34,16 @@ sudo tar xzf fresnel-site.tar.gz -C /var/www/html/
 
 That's all an upgrade needs. Nothing has to be restarted, because every API request starts a fresh Python process.
 
+To deploy from another machine with rsync instead (here into a site at `/fresnel_kml/`; build with `--name fresnel_kml`):
+
+```bash
+python3 tools/build_site.py --name fresnel_kml --no-tarball
+rsync -a --delete --exclude __pycache__ --chmod=Dug+rwx,Do+rx,Fug+rw,Fo+r \
+  dist/fresnel_kml/ SERVER:/var/www/html/SITE/fresnel_kml/
+```
+
+Use `+` permission modes as shown. A fixed mode such as `F664` removes the execute bit from `api/fresnel.cgi`, and the API then returns 403. `__pycache__` is excluded because the web server creates it as `www-data`, so the deploying user may not be able to delete it.
+
 Check it:
 
 ```bash
