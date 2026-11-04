@@ -15,6 +15,8 @@ const FIELD_INPUT = { height_m: "height", ground_m: "ground" };
 const FIELD_LABELS = { name: "name", lat: "latitude", lon: "longitude", height_m: "height",
   height_ref: "height reference", ground_m: "ground elevation" };
 const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref", gnd: "ground_m" };
+// Tree inputs, kept as typed: they are in the page's height units, which are saved alongside.
+const TREE_FIELDS = { th: "tree_height", ta: "tree_clearance_a", tb: "tree_clearance_b" };
 
 // link: in link selection, the RF link chosen for Site B when its node has no location in the feed.
 function blankSite() {
@@ -570,10 +572,26 @@ function save() {
   if (!stateReady) return;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1, mode: siteState.mode, units: pageUnits(),
-      sites: siteState.sites, freq_ov: siteState.freq_ov }));
+      sites: siteState.sites, freq_ov: siteState.freq_ov, trees: treeState() }));
   } catch (err) {
     /* storage full or disabled: the page still works, it just won't remember */
   }
+}
+
+function treeState() {
+  const t = { on: $("#trees").checked };
+  for (const [short, id] of Object.entries(TREE_FIELDS)) t[short] = $(`#${id}`).value.trim();
+  return t;
+}
+
+function applyTrees(t) {
+  if (!t || typeof t !== "object") return;
+  $("#trees").checked = t.on === true;
+  for (const [short, id] of Object.entries(TREE_FIELDS)) {
+    const v = t[short];
+    if (typeof v === "string" && v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0) $(`#${id}`).value = v;
+  }
+  $("#trees").dispatchEvent(new Event("change"));
 }
 
 function loadSaved() {
@@ -599,6 +617,11 @@ function toUrl() {
       p.set(`${pre}_${short}`, typeof v === "number" ? String(Number(v.toFixed(2))) : v);
     }
   }
+  const t = treeState();
+  if (t.on) {
+    p.set("t", "1");
+    for (const short of Object.keys(TREE_FIELDS)) if (t[short] !== "") p.set(short, t[short]);
+  }
   const url = new URL(location.href);
   url.search = p.toString();
   url.hash = "";
@@ -608,11 +631,14 @@ function toUrl() {
 // State from ?mode=...&a=...; the parameters are then removed so later edits survive a reload.
 function fromUrl() {
   const p = new URLSearchParams(location.search);
-  const keys = ["mode", "f", ...["a", "b"].flatMap((pre) => [pre, ...Object.keys(URL_FIELDS).map((k) => `${pre}_${k}`)])];
+  const keys = ["mode", "f", "t", ...Object.keys(TREE_FIELDS),
+    ...["a", "b"].flatMap((pre) => [pre, ...Object.keys(URL_FIELDS).map((k) => `${pre}_${k}`)])];
   if (!keys.some((k) => p.has(k))) return null;
   const f = Number(p.get("f"));
+  const trees = { on: p.get("t") === "1" };
+  for (const short of Object.keys(TREE_FIELDS)) trees[short] = p.get(short) || "";
   const st = { v: 1, mode: p.get("mode") === "link" ? "link" : "node", units: ["m", "ft"].includes(p.get("u")) ? p.get("u") : null,
-    freq_ov: p.has("f") && Number.isFinite(f) && f > 0 ? f : null, sites: {} };
+    freq_ov: p.has("f") && Number.isFinite(f) && f > 0 ? f : null, trees, sites: {} };
   for (const [key, pre] of [["site_a", "a"], ["site_b", "b"]]) {
     const s = blankSite();
     s.node = p.get(pre) || null;
@@ -712,6 +738,8 @@ function initSites() {
     syncFreq();
   });
   $("#copy-link").addEventListener("click", copyLink);
+  $("#trees").addEventListener("change", save);
+  for (const id of Object.values(TREE_FIELDS)) $(`#${id}`).addEventListener("input", save);
   restoring = fromUrl() || loadSaved();
   if (restoring) {
     if (restoring.units === "m" || restoring.units === "ft") {
@@ -719,6 +747,7 @@ function initSites() {
       updateUnitLabels();
     }
     siteState.mode = restoring.mode === "link" ? "link" : "node";
+    applyTrees(restoring.trees);
   }
   renderMode();
   loadNodes().finally(finishRestore);

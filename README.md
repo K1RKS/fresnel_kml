@@ -57,7 +57,7 @@ When the server has a Nodographer feed configured (by default the [K1RKS MeshMap
 
 A picked node fills the name, position, antenna height above ground and the link frequency. These are defaults: a field you change is highlighted in amber, its tooltip shows the node's value, and the site's note lists what you changed. Clearing a changed field puts the node's value back. Emptying the Mesh node box drops the pick and keeps the values as plain manual entry. Switching the height units converts picked heights, overrides included.
 
-The page remembers the mode, the picks and your changes in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
+The page remembers the mode, the picks, your changes and the tree settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
 For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
