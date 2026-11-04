@@ -35,7 +35,8 @@ The spec calls the CLI `fresnel_kml.py`. A package can't have that same name: ru
 - `fresnelkml/analysis.py`: `Site`, `Options`, `LinkReport` (with `to_dict()` for JSON), `analyze()`
 - `fresnelkml/colors.py`: zone color parsing, conversion to KML `aabbggrr`, and the random pick
 - `fresnelkml/kml.py`: `build_kml()`, written with ElementTree
-- `fresnelkml/parsing.py`: site strings, DMS coordinates, CSV and JSON request objects, validation, feet conversion
+- `fresnelkml/coords.py`: coordinate parsing for every supported format (see "Coordinate input") and decimal/DMS/DDM formatting for display
+- `fresnelkml/parsing.py`: site strings, CSV and JSON request objects, validation, feet conversion; uses `coords.py` for positions
 - `fresnelkml/cli.py`: argparse flags from spec section 5 and the stdout summary table
 - `fresnelkml/webapi.py`: `handle_request(method, headers, body, env) -> (status, headers, body)`. It has no CGI or HTTP-server dependency, so the CGI script, the dev server and the tests all call it the same way.
 - `web/index.html`, `web/app.js`, `web/style.css`: the page (vanilla JavaScript, no build step)
@@ -84,7 +85,7 @@ location = /site/api/fresnel.cgi {
 ```json
 {
   "site_a": {"name": "TowerA", "lat": 37.0, "lon": -122.0, "agl_m": 30, "ground_m": null},
-  "site_b": {"name": "TowerB", "lat": "37°03'00\"N", "lon": -121.9, "asl_m": 412.5},
+  "site_b": {"name": "TowerB", "position": "10S 597811 4100985", "asl_m": 412.5},
   "options": {"freq_ghz": 5.8, "zone": 1, "sixty": true, "k": 1.3333, "clutter_m": 0,
               "elev_source": "auto",
               "stations": 64, "ring_points": 24, "style": "mesh",
@@ -94,12 +95,17 @@ location = /site/api/fresnel.cgi {
 }
 ```
 
-- Every key in `options` is optional and defaults to the spec value. Latitude and longitude can be decimal degrees or DMS strings.
+- Every key in `options` is optional and defaults to the spec value.
+- A site's position is given either as `lat` and `lon` or as one `position` string, but not both (see "Coordinate input"):
+  - `lat`/`lon` can each be a JSON number (decimal degrees, the normal case) or a string in any single-coordinate format.
+  - `position` can be any format that describes both values at once, for example `"10S 581526 4099055"`, `"CM87xa08"` or `"geo:37.0,-122.0"`.
+- `coord_display` (`"decimal"` by default, or `"dms"`/`"ddm"`) sets how positions appear in balloons and in the report's `display` strings. KML coordinates and the report's `lat`/`lon` numbers are always decimal degrees.
 - Each site gives exactly one of `agl_m` or `asl_m` (see "Antenna height reference"). Giving both, or neither, is a `400` error.
 - `elev_source` is `"auto"` (use the server's configured chain) or the `name` of one entry in that chain, which limits the lookup to that source. An unknown name is a `400` error. Clients can't add sources or URLs; only the server config can.
 - `color` sets the color of the Fresnel zone shape (see "Zone color"). It defaults to `"random"`. The chosen color is returned in `report.zone_color`.
 - With `"format": "kml"` (the default), the response is `200`, `Content-Type: application/vnd.google-earth.kml+xml` and `Content-Disposition: attachment; filename="Fresnel_TowerA_TowerB.kml"`. The filename is sanitised.
 - With `"format": "json"`, the response is `{"kml": "...", "report": {distance, bearings, r1_max, r60, min_clearance, status, zone_color, sites: [...], elevation_sources, profile: [...]}, "warnings": [...]}`. The web page uses this format so it can show a summary and offer the download.
+- `GET api/fresnel.cgi?parse=TEXT` (optionally with `&axis=lat` or `&axis=lon`) returns `{"lat": ..., "lon": ..., "format": "dms", "display": "...", "notes": [...]}` or a `400` error. The web page calls it when a coordinate field loses focus, so it can show the decoded decimal value before you submit.
 - `GET api/fresnel.cgi?sources` returns the names and types of the configured elevation sources, never their URLs or paths.
 - Errors always come back as JSON `{"error": "...", "field": "..."}`:
   - `400`: bad input
@@ -111,7 +117,13 @@ location = /site/api/fresnel.cgi {
 - Example: `curl -X POST -H 'Content-Type: application/json' -d @req.json https://host/site/api/fresnel.cgi -o link.kml`
 
 ## Web page
-- Inputs for each site: name, latitude, longitude (decimal degrees or DMS), a height value, and a "Height is: above ground / above sea level" toggle (default: above ground). The optional ground-elevation override field is only shown for "above ground".
+- Inputs for each site: name, position, a height value, and a "Height is: above ground / above sea level" toggle (default: above ground). The optional ground-elevation override field is only shown for "above ground".
+- Position input:
+  - By default there are separate Latitude and Longitude fields with decimal placeholders (`37.000000`, `-122.000000`).
+  - Those fields also accept DMS, DDM and hemisphere-letter forms.
+  - A "Paste position" link swaps in a single field for whole-position formats such as a lat,lon pair, UTM, MGRS, Maidenhead or Plus code.
+  - When a field loses focus, the page calls `?parse` and shows the decoded value in decimal under it (for example `= 37.034167, -122.083333 (from DMS)`), or the error message.
+- A "Show positions as" choice for the results (Decimal by default, DMS or DDM), sent as `coord_display`.
 - A hint under the toggles. If both sites use above sea level and the terrain check is off, it says no elevation lookup will be made.
 - A "Zone color" control: a "Random" checkbox, checked by default, next to an `<input type="color">` picker. The picker is disabled while "Random" is checked.
 - A collapsible "Advanced" section with the remaining options, including an "Elevation source" dropdown filled from `GET api/fresnel.cgi?sources`.
@@ -135,6 +147,49 @@ location = /site/api/fresnel.cgi {
   - The `rings` style writes ring `LineString`s only.
 - Coordinates are written as `lon,lat,alt` with `%.7f,%.7f,%.2f`. ElementTree handles XML escaping.
 - Description balloons show frequency, wavelength, distance, both bearings, maximum r1, 0.6·r1, minimum clearance and status, and the ground / AGL / ASL / elevation source for each site.
+
+### Coordinate input
+Decimal degrees on the WGS-84 datum are the default everywhere: in form placeholders, API examples, reports and balloons. The parser in `coords.py` also accepts every common format, detects which one it was given, and records that format in the report (for example `"from": "mgrs"`).
+
+Single-coordinate formats, for a `lat` or `lon` field:
+
+| Format | Examples |
+|---|---|
+| Decimal degrees (default) | `37.034167`, `-122.083333`, `+37.034167` |
+| Decimal with hemisphere letter | `37.034167N`, `N37.034167`, `122.083333 W` |
+| Degrees, minutes, seconds (DMS) | `37°02'03"N`, `37° 2′ 3.0″ N`, `37 02 03 N`, `37:02:03N`, `37d02m03sN`, `-122 05 00` |
+| Degrees and decimal minutes (DDM, the usual GPS-receiver form) | `37°02.050'N`, `N37 02.050`, `37 2.05N`, `-122 05.000` |
+
+Whole-position formats, for the `position` field, or the CLI's 3-field site form. Every example in both tables is the same point, 37.034167, −122.083333:
+
+| Format | Examples |
+|---|---|
+| Lat,lon pair in any of the forms above | `37.034167, -122.083333`, `37°02'03"N 122°05'00"W`, `N37 02.050 W122 05.000` |
+| ISO 6709 | `+37.034167-122.083333/`, `+370203-1220500/` |
+| geo URI (RFC 5870) | `geo:37.034167,-122.083333` |
+| UTM | `10S 581526 4099055` (latitude band letter), `10N 581526 4099055` (hemisphere letter) |
+| MGRS | `10SEF8152599055`, `10S EF 81525 99055` (spaces allowed; 1 to 5 digit precision) |
+| Maidenhead grid locator | `CM87`, `CM87xa`, `CM87xa08` |
+| Plus code (Open Location Code), full codes only | `849V2WM8+MM` |
+
+Parsing rules:
+- Whitespace, the degree/minute/second symbols (`°`, `º`, `'`, `′`, `’`, `"`, `″`, `”`) and the letters `d`, `m`, `s` are interchangeable separators. Case doesn't matter.
+- Space-separated numbers are read by count: one number is decimal degrees, two are DDM, three are DMS.
+- A number with no sign and no hemisphere letter is north or east. A negative sign together with a hemisphere letter is a `400` error, because the two disagree.
+- Minutes and seconds must be below 60; latitude must be within ±90 and longitude within ±180. Out-of-range values are errors, never silently wrapped. On output, the longitude 180 is written as −180.
+- Pairs are always latitude first (as in Google Maps, ISO 6709 and geo URIs). If the first value is out of latitude range but the second isn't, the error says the order looks swapped. The tool never swaps them automatically.
+- A comma used as a decimal mark (`37,5`) is not accepted, because a comma separates the two values of a pair. The error suggests using `.`.
+- The letter after a UTM zone number is ambiguous for `N` and `S`: they are latitude bands (0–8°N and 32–40°N) and also the common hemisphere shorthand. The letter is first read as a band. If the resulting latitude isn't inside that band and the letter is `N` or `S`, it is read as a hemisphere instead. If neither reading fits, it's a `400` error. This handles `10S 581526 4099055` (band S, California) and `10N 581526 4099055` (northern hemisphere) correctly. The words `north` and `south` are also accepted.
+- Zone-based formats are converted with pure-Python WGS-84 formulas: UTM uses Krüger series (accurate to well under a millimetre), and MGRS uses the standard 100 km square lettering on top of UTM.
+- Area-based formats (Maidenhead and Plus codes) decode to the centre of their cell. A note gives the cell size, and a warning is added when the cell is larger than 100 m (for example, a 6-character Maidenhead locator is about 4.6 km × 2.3 km, which is too coarse for tower placement).
+- Short Plus codes, which need a nearby town, aren't accepted; the error says to use the full code.
+- Every input is assumed to be WGS-84. Old datums (NAD27 and similar) aren't converted, which is documented in the README. GPS receivers and Google Earth already use WGS-84.
+- Display (`coord_display`): `decimal` gives `37.0341670, -122.0833330`; `dms` gives `37°02'03.0"N 122°05'00.0"W`; `ddm` gives `N37°02.0500' W122°05.0000'`.
+- CLI:
+  - Four comma-separated fields are `Name,LAT,LON,HEIGHT`, where LAT and LON can be any single-coordinate format.
+  - Three fields are `Name,POSITION,HEIGHT`, for whole-position formats without commas such as UTM, MGRS, Maidenhead and Plus codes.
+  - The CSV `lat`/`lon` columns can be any single-coordinate format, or a `position` column can be used instead.
+  - `--coord-display` sets the display format.
 
 ### Antenna height reference
 - `asl_m`: the antenna height above sea level, given directly. The site needs no elevation lookup.
@@ -259,6 +314,14 @@ These sizes were measured from the AWS tile bucket in November 2026. The area is
   - feet conversion of `asl_m`
   - `asl_m − ground_m < 0` is rejected
   - relative mode with ASL and no ground is rejected
+- `test_coords.py`:
+  - a table of every example in "Coordinate input", each checked to 1e-7°, plus its detected format
+  - DD/DMS/DDM round trips through the display formatter
+  - errors: minutes or seconds of 60 or more, out-of-range values, a sign that conflicts with the hemisphere letter, a swapped pair, a comma decimal mark, a short Plus code
+  - UTM and MGRS against published reference points, in both hemispheres and including the special zones around Norway and Svalbard; cross-checked against `pyproj` when installed
+  - the UTM `N`/`S` band-versus-hemisphere rule, including an error when neither reading fits
+  - Maidenhead and Plus code cell centres, and the coarse-cell warning
+  - `?parse` endpoint responses
 - `test_heights.py`:
   - two ASL sites with the terrain check left at its default: the HTTP and file-access mocks both assert no lookups happen
   - one ASL site and one AGL site: exactly one site lookup
@@ -298,7 +361,7 @@ These sizes were measured from the AWS tile bucket in November 2026. The area is
 1. Scaffold: `pyproject.toml`, the `fresnelkml/` package skeleton, the `fresnel_kml.py` wrapper, `web/`, `deploy/` and `tests/`.
 2. `fresnel.py` and tests T1 to T5.
 3. `geo.py` and tests T6, T7 and T11.
-4. `parsing.py` (site strings, DMS, CSV, JSON request objects, validation, feet conversion) and edge-case tests.
+4. `coords.py` (all coordinate formats, detection, display formatting) and `test_coords.py`; then `parsing.py` (site strings, CSV, JSON request objects, validation, feet conversion) and edge-case tests.
 5. `elevation.py`: HTTP helper, providers with configurable URLs, per-point fallback chain, retries, cross-process throttle, optional cache; test T12.
 6. `config.py`, `deploy/config.example.json` and `test_elevation_chain.py`.
 7. `local_hgt.py`, `tools/fetch_hgt.py` and `test_local_hgt.py`.
