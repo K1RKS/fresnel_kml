@@ -291,6 +291,7 @@ function showResult(data, units) {
   $("#warnings").innerHTML = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
   drawProfile(r);
   $("#result").hidden = false;
+  drawMap(r);
   $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -318,6 +319,81 @@ function drawProfile(r) {
     $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
     drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from });
   }
+}
+
+let mapConfig = null;
+let map = null;
+const mapGroups = {};
+
+async function loadMapConfig() {
+  try {
+    const resp = await fetch(`${API}?map`);
+    if (resp.ok) mapConfig = await resp.json();
+  } catch (err) {
+    /* no tile servers: the map stays blank but overlays still draw */
+  }
+}
+
+function ensureMap() {
+  if (map) return map;
+  map = L.map("map", { scrollWheelZoom: false });
+  map.on("click", () => map.scrollWheelZoom.enable());
+  map.on("mouseout", () => map.scrollWheelZoom.disable());
+  const bases = {};
+  for (const s of (mapConfig && mapConfig.tile_servers) || []) {
+    const opts = { maxZoom: s.max_zoom || 19, attribution: s.attribution || "" };
+    if (s.subdomains) opts.subdomains = s.subdomains;
+    bases[s.name] = L.tileLayer(s.url, opts);
+  }
+  const first = bases[mapConfig && mapConfig.default] || Object.values(bases)[0];
+  if (first) first.addTo(map);
+  for (const name of ["Fresnel zone", "60% zone", "Line of sight", "Sites", "Obstructions"]) {
+    mapGroups[name] = L.layerGroup();
+    if (name !== "60% zone") mapGroups[name].addTo(map);
+  }
+  L.control.layers(bases, mapGroups, { collapsed: true }).addTo(map);
+  L.control.scale({ metric: true, imperial: true }).addTo(map);
+  return map;
+}
+
+function drawMap(r) {
+  const box = $("#map-box");
+  if (typeof L === "undefined" || !r.map) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  ensureMap();
+  Object.values(mapGroups).forEach((g) => g.clearLayers());
+  const color = r.zone_color.hex;
+  L.polygon(r.map.zone, { color, weight: 1, fillColor: color, fillOpacity: 0.35 })
+    .bindTooltip(`Fresnel zone ${r.zone}: max radius ${hfmt(r.zone_max_m, 2)}`).addTo(mapGroups["Fresnel zone"]);
+  if (r.map.zone60) {
+    L.polygon(r.map.zone60, { color: "#e8590c", weight: 1, fillColor: "#ffa500", fillOpacity: 0.3 })
+      .bindTooltip("60% of zone 1").addTo(mapGroups["60% zone"]);
+  }
+  L.polyline(r.map.los, { color: "#c9a000", weight: 2 }).addTo(mapGroups["Line of sight"]);
+  for (const s of r.sites) {
+    L.circleMarker([s.lat, s.lon], { radius: 6, color: "#1d232b", weight: 2, fillColor: "#fff", fillOpacity: 1 })
+      .bindTooltip(esc(s.name), { permanent: true, direction: "top", offset: [0, -6], className: "site-tip" })
+      .addTo(mapGroups["Sites"]);
+  }
+  const samples = [...(r.profile || []), ...(r.profile_a || []), ...(r.profile_b || [])];
+  const a = r.sites[0].name;
+  for (const q of samples) {
+    if (q.clearance !== null && q.clearance < 0.6) {
+      L.circleMarker([q.lat, q.lon], { radius: 4, color: "#cf222e", weight: 1, fillColor: "#cf222e", fillOpacity: 0.9 })
+        .bindTooltip(`terrain: ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(a)}`)
+        .addTo(mapGroups["Obstructions"]);
+    }
+    if (q.tree_clearance !== null && q.tree_clearance !== undefined && q.tree_clearance < 0.6) {
+      L.circleMarker([q.lat, q.lon], { radius: 5, color: "#b02a37", weight: 2, fill: false })
+        .bindTooltip(`trees: ${q.tree_clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(a)}`)
+        .addTo(mapGroups["Obstructions"]);
+    }
+  }
+  map.invalidateSize();
+  map.fitBounds(L.latLngBounds(r.map.los).pad(0.15));
 }
 
 // Consecutive samples that have trees on them.
@@ -480,6 +556,7 @@ function init() {
   curl.textContent = curl.textContent.replace("https://HOST/site/api/fresnel.cgi", new URL(API, location.href).href);
   updateLookupHint();
   loadSources();
+  loadMapConfig();
 }
 
 init();

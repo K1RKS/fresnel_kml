@@ -78,6 +78,24 @@ With no config file, the server looks up ground elevation from the public OpenTo
 
 - A config file in another place can be selected with `fastcgi_param FRESNEL_CONFIG /path/config.json;`.
 
+## 5. Optional: map tile servers
+
+The page's map is drawn with Leaflet, which ships inside the folder (`vendor/leaflet/`, BSD 2-Clause licence). The map tiles come from the tile servers listed under `map` in the same `/etc/fresnelkml/config.json`. Without a `map` section, the page offers OpenStreetMap (the default) and OpenTopoMap. To use your own or an AREDN tileserver, list it, and make it the default if you like:
+
+```json
+"map": {
+  "tile_servers": [
+    {"name": "AREDN K1RKS", "url": "//k1rks-tileserver-world.local.mesh/hot/{z}/{x}/{y}.png",
+     "attribution": "&copy; OpenStreetMap contributors", "max_zoom": 19},
+    {"name": "OpenStreetMap", "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+     "attribution": "&copy; OpenStreetMap contributors", "max_zoom": 19}
+  ],
+  "default": "AREDN K1RKS"
+}
+```
+
+Each entry needs `name` and a `url` containing `{z}`, `{x}` and `{y}`. `{s}` with an optional `subdomains` string, `attribution` (HTML) and `max_zoom` are optional. The browser fetches tiles directly, so a `//host/...` URL follows the page's own http or https, and the page's user must be able to reach that host. `GET api/fresnel.cgi?map` shows what the page will use. The public OpenStreetMap servers are fine for light use under their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/); for heavy use, point this at your own tileserver.
+
 The public OpenTopoData limits (1 request/s, 1000/day) are shared by everyone using your server. The service already spaces requests out across concurrent users, and the commented `limit_req` lines in the NGINX snippet can cap how often each client may call the API.
 
 ## Troubleshooting

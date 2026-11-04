@@ -146,6 +146,18 @@ class LinkReport:
     def obstructions(self) -> list[ProfilePoint]:
         return [p for p in self.all_samples if p.clearance is not None and p.clearance < CLEAR_RATIO]
 
+    def footprint(self, radius_attr: str = "radius_m") -> list[list[float]]:
+        """Top-down outline of a zone: its widest left and right edges, as a closed [lat, lon] ring."""
+        right, left = [], []
+        for st in self.stations:
+            r = getattr(st, radius_attr)
+            theta = math.radians(st.bearing)
+            east, north = r * math.cos(theta), -r * math.sin(theta)
+            right.append(geo.offset(st.lat, st.lon, east, north))
+            left.append(geo.offset(st.lat, st.lon, -east, -north))
+        ring = right + left[::-1]
+        return [[round(lat, 7), round(lon, 7)] for lat, lon in ring]
+
     @property
     def tree_obstructions(self) -> list[ProfilePoint]:
         return [p for p in self.all_samples if p.tree_clearance is not None and p.tree_clearance < CLEAR_RATIO]
@@ -191,6 +203,11 @@ class LinkReport:
             "status": self.status,
             "zone_color": self.zone_color.to_dict(),
             "elevation_sources": self.elevation_sources,
+            "map": {
+                "los": [[round(st.lat, 7), round(st.lon, 7)] for st in self.stations],
+                "zone": self.footprint("radius_m"),
+                "zone60": self.footprint("radius60_m") if self.options.sixty else None,
+            },
             "profile": [_point_dict(p) for p in self.profile],
             "profile_a": [_point_dict(p) for p in self.profile_a],
             "profile_b": [_point_dict(p) for p in self.profile_b],

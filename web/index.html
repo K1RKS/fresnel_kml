@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fresnel Zone KML Generator</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -137,6 +138,11 @@
     <div class="swatch-box"><span id="swatch"></span><span id="swatch-text"></span></div>
   </div>
   <ul id="warnings" class="warnings"></ul>
+  <div id="map-box">
+    <h3>Map</h3>
+    <div id="map" role="region" aria-label="Map of the link"></div>
+    <p class="legend"><span class="lg zone-fill"></span>Fresnel zone (top-down) <span class="lg sixty-fill"></span>60% zone (in the layer menu) <span class="lg los"></span>line of sight <span class="lg-dot"></span>terrain below 60% <span class="lg-dot tree"></span>trees below 60% &middot; click the map to zoom with the scroll wheel</p>
+  </div>
   <div id="profile-box">
     <h3>Terrain profile</h3>
     <h4 id="profile-title-main" class="plot-title">Whole path</h4>
@@ -164,6 +170,7 @@
 </main>
 
 <footer>Coordinates are WGS-84. Heights above sea level need no elevation lookup unless the terrain check is on.</footer>
+<script src="vendor/leaflet/leaflet.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

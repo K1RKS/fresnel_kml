@@ -25,7 +25,21 @@ DEFAULT_CONFIG = {
         "timeout_s": 10,
         "retries": 2,
         "cache_dir": None,
-    }
+    },
+    "map": {
+        "tile_servers": [
+            {"name": "OpenStreetMap", "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+             "attribution": "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> "
+                            "contributors",
+             "max_zoom": 19},
+            {"name": "OpenTopoMap", "url": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+             "attribution": "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> "
+                            "contributors, SRTM | style &copy; <a href=\"https://opentopomap.org\">OpenTopoMap</a> "
+                            "(CC-BY-SA)",
+             "max_zoom": 17},
+        ],
+        "default": "OpenStreetMap",
+    },
 }
 
 SOURCE_TYPES = ("opentopodata", "open-elevation", "usgs", "google", "local_hgt")
@@ -42,12 +56,67 @@ class Config:
     retries: int = 2
     cache_dir: str | None = None
     path: str | None = None
+    tile_servers: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["map"]["tile_servers"]))
+    default_tile_server: str | None = DEFAULT_CONFIG["map"]["default"]
 
     def source_names(self) -> list[str]:
         return [s["name"] for s in self.chain]
 
     def public_sources(self) -> list[dict]:
         return [{"name": s["name"], "type": s["type"]} for s in self.chain]
+
+    def public_map(self) -> dict:
+        """Tile servers for the web page. Browsers fetch tiles directly, so the URLs are public."""
+        return {"tile_servers": self.tile_servers, "default": self.default_tile_server}
+
+
+_TILE_KEYS = {"name", "url", "attribution", "max_zoom", "subdomains"}
+
+
+def _validate_tile_server(entry, index: int) -> dict:
+    where = f"map.tile_servers[{index}]"
+    if not isinstance(entry, dict):
+        raise ConfigError(f"{where} must be an object")
+    unknown = set(entry) - _TILE_KEYS
+    if unknown:
+        raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")
+    name, url = entry.get("name"), entry.get("url")
+    if not isinstance(name, str) or not name:
+        raise ConfigError(f"{where}.name must be a non-empty string")
+    if not isinstance(url, str) or not url.startswith(("http://", "https://", "//")):
+        raise ConfigError(f"{where}.url must be an http(s) or protocol-relative (//host/...) URL")
+    if not all(token in url for token in ("{z}", "{x}", "{y}")):
+        raise ConfigError(f"{where}.url must contain {{z}}, {{x}} and {{y}}")
+    out = {"name": name, "url": url, "attribution": entry.get("attribution", ""),
+           "max_zoom": entry.get("max_zoom", 19)}
+    if not isinstance(out["attribution"], str):
+        raise ConfigError(f"{where}.attribution must be a string")
+    if not isinstance(out["max_zoom"], int) or not 1 <= out["max_zoom"] <= 24:
+        raise ConfigError(f"{where}.max_zoom must be an integer from 1 to 24")
+    if "subdomains" in entry:
+        if not isinstance(entry["subdomains"], str) or not entry["subdomains"]:
+            raise ConfigError(f"{where}.subdomains must be a string such as \"abc\"")
+        out["subdomains"] = entry["subdomains"]
+    return out
+
+
+def _parse_map(data) -> tuple[list[dict], str | None]:
+    if data is None:
+        default = DEFAULT_CONFIG["map"]
+        return copy.deepcopy(default["tile_servers"]), default["default"]
+    if not isinstance(data, dict):
+        raise ConfigError("'map' must be an object")
+    servers_raw = data.get("tile_servers", DEFAULT_CONFIG["map"]["tile_servers"])
+    if not isinstance(servers_raw, list):
+        raise ConfigError("map.tile_servers must be a list")
+    servers = [_validate_tile_server(e, i) for i, e in enumerate(servers_raw)]
+    names = [s["name"] for s in servers]
+    if len(set(names)) != len(names):
+        raise ConfigError("map tile server names must be unique")
+    default = data.get("default", names[0] if names else None)
+    if servers and default not in names:
+        raise ConfigError(f"map.default '{default}' is not one of the tile servers")
+    return servers, (default if servers else None)
 
 
 def _validate_source(entry, index: int) -> dict:
@@ -94,7 +163,8 @@ def parse_config(data: dict, path: str | None = None) -> Config:
         raise ConfigError("elevation.retries must be a non-negative integer")
     if cache_dir is not None and not isinstance(cache_dir, str):
         raise ConfigError("elevation.cache_dir must be a string or null")
-    return Config(chain, float(timeout), retries, cache_dir, path)
+    tile_servers, default_tiles = _parse_map(data.get("map"))
+    return Config(chain, float(timeout), retries, cache_dir, path, tile_servers, default_tiles)
 
 
 def load_config(path: str | None = None, env=None) -> Config:

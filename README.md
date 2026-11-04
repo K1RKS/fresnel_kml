@@ -47,6 +47,10 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Response**: the KML file as a download, or `{"kml", "report", "warnings"}` with `"format": "json"`. Errors are JSON `{"error", "field"}` with status 400, 405, 413, 502 (no elevation available) or 504.
 - `GET ?sources` lists the configured elevation sources; `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
 
+### Map
+
+The results include a top-down map (Leaflet, bundled in `web/vendor/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. See [deploy/INSTALL.md](deploy/INSTALL.md).
+
 ### Elevation sources
 
 By default the server uses the public OpenTopoData API (`ned10m`, then `srtm30m`), with Open-Elevation as a fallback. `/etc/fresnelkml/config.json` can change the chain: add a self-hosted OpenTopoData server by URL, or a folder of SRTM tiles (`local_hgt`) for offline use. See [deploy/config.example.json](deploy/config.example.json) and `tools/fetch_hgt.py`.
