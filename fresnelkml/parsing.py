@@ -9,8 +9,8 @@ from dataclasses import dataclass, field, fields
 
 from .analysis import Options, Site
 from .coords import LAT, LON, CoordinateError, parse_coordinate, parse_position
+from .units import FEET
 
-FEET = 0.3048
 SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m"}
 REQUEST_KEYS = {"site_a", "site_b", "options", "format"}
 OPTION_KEYS = {f.name for f in fields(Options)} | {"units"}
@@ -151,6 +151,7 @@ def parse_options_dict(data) -> tuple[Options, str, list[str]]:
     if "terrain_check" in data:
         tc = data["terrain_check"]
         opt.terrain_check = None if tc is None or tc == "auto" else _boolean(tc, "options.terrain_check")
+    opt.units = units
     if units == "ft":
         opt.clutter_m *= FEET
     return opt, units, warnings

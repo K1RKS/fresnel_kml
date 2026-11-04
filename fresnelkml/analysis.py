@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
+from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
 SHORT_LINK_M = 50.0
@@ -53,6 +54,7 @@ class Options:
     mode: str = "absolute"
     color: str = "random"
     coord_display: str = "decimal"
+    units: str = "m"  # display units for heights and distances; inputs are converted to metres before this
 
 
 @dataclass
@@ -112,6 +114,7 @@ class LinkReport:
     profile: list[ProfilePoint] = field(default_factory=list)
     min_clearance: float | None = None
     min_clearance_d_m: float | None = None
+    min_clearance_m: float | None = None  # line of sight minus effective terrain at the worst point
     status: str | None = None
     elevation_sources: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -146,6 +149,8 @@ class LinkReport:
             "terrain_checked": self.terrain_checked,
             "min_clearance": None if self.min_clearance is None else round(self.min_clearance, 3),
             "min_clearance_d_m": _r(self.min_clearance_d_m),
+            "min_clearance_m": _r(self.min_clearance_m),
+            "units": self.options.units,
             "status": self.status,
             "zone_color": self.zone_color.to_dict(),
             "elevation_sources": self.elevation_sources,
@@ -183,6 +188,7 @@ def validate_options(opt: Options) -> None:
         ("style", opt.style in ("mesh", "rings"), "must be 'mesh' or 'rings'"),
         ("mode", opt.mode in ("absolute", "relative"), "must be 'absolute' or 'relative'"),
         ("coord_display", opt.coord_display in DISPLAY_FORMATS, f"must be one of {', '.join(DISPLAY_FORMATS)}"),
+        ("units", opt.units in ("m", "ft"), "must be 'm' or 'ft'"),
         ("terrain_check", opt.terrain_check in (None, True, False), "must be true, false or null"),
         ("sixty", isinstance(opt.sixty, bool), "must be true or false"),
         ("elev_source", isinstance(opt.elev_source, str) and opt.elev_source != "", "must be a source name"),
@@ -245,11 +251,11 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         raise AnalysisError("The two sites are less than 1 m apart.", "site_b")
     n_mesh = opt.stations
     if distance < SHORT_LINK_M:
-        warnings.append(f"Very short link ({distance:.1f} m); results may not be meaningful.")
+        warnings.append(f"Very short link ({fmt_distance(distance, opt.units)}); results may not be meaningful.")
         n_mesh = max(n_mesh, 8)
     if distance > LONG_LINK_M:
-        warnings.append(f"Long link ({distance / 1000:.1f} km); {opt.freq_ghz:g} GHz is unusual at this range "
-                        "and earth bulge matters.")
+        warnings.append(f"Long link ({fmt_distance(distance, opt.units, 1)}); {opt.freq_ghz:g} GHz is unusual at "
+                        "this range and earth bulge matters.")
     if not geo.have_pyproj() and max(abs(site_a.lat), abs(site_b.lat)) > geo.POLAR_LIMIT_DEG:
         warnings.append("Near the pole without pyproj installed; geometry uses a spherical approximation.")
 
@@ -307,8 +313,8 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
             ref = "asl"
             agl = None if ground is None else asl - ground
             if agl is not None and agl < 0 and s.ground_m is None:
-                warnings.append(f"{s.name}: the given height above sea level is {-agl:.1f} m below the "
-                                f"looked-up ground ({source}).")
+                warnings.append(f"{s.name}: the given height above sea level is {fmt_height(-agl, opt.units)} "
+                                f"below the looked-up ground ({source}).")
         results.append(SiteResult(s.name, s.lat, s.lon, s.position_format, ref, asl, agl, ground, source))
     ra, rb = results
 
@@ -335,6 +341,7 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         report.terrain_checked = True
         min_c = None
         min_d = None
+        min_gap = None
         for p, found in zip(profile_pts, looked_up):
             d1 = p.t * distance
             d2 = distance - d1
@@ -346,9 +353,10 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
             report.profile.append(ProfilePoint(p.t, d1, p.lat, p.lon, found.elevation, bulge, effective,
                                                los, r1, c))
             if c is not None and (min_c is None or c < min_c):
-                min_c, min_d = c, d1
+                min_c, min_d, min_gap = c, d1, los - effective
         report.min_clearance = min_c
         report.min_clearance_d_m = min_d
+        report.min_clearance_m = min_gap
         if min_c is None:
             report.status = "UNKNOWN"
             warnings.append("Link too short for a meaningful Fresnel clearance check.")

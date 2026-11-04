@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from . import geo
 from .analysis import CLEAR_RATIO, LinkReport, MeshStation, Options, Site, analyze
 from .coords import format_position
+from .units import fmt_distance, fmt_gap, fmt_height
 
 KML_NS = "http://www.opengis.net/kml/2.2"
 GX_NS = "http://www.google.com/kml/ext/2.2"
@@ -68,38 +69,38 @@ def _style(doc: ET.Element, sid: str, line=None, width=None, poly=None, outline=
             _sub(ps, "outline", outline)
 
 
-def _fmt_m(value) -> str:
-    return "unknown" if value is None else f"{value:.1f} m"
-
-
 def _site_description(report: LinkReport, s) -> str:
+    u = report.options.units
     lines = [
         f"Position: {html.escape(format_position(s.lat, s.lon, report.options.coord_display))}",
-        f"Ground: {_fmt_m(s.ground_m)}" + (f" ({html.escape(s.ground_source)})" if s.ground_source else ""),
-        f"AGL: {_fmt_m(s.agl_m)}",
-        f"ASL: {_fmt_m(s.asl_m)}" + (" (given)" if s.height_ref == "asl" else ""),
+        f"Ground: {fmt_height(s.ground_m, u)}" + (f" ({html.escape(s.ground_source)})" if s.ground_source else ""),
+        f"AGL: {fmt_height(s.agl_m, u)}",
+        f"ASL: {fmt_height(s.asl_m, u)}" + (" (given)" if s.height_ref == "asl" else ""),
     ]
     return "<br/>".join(lines)
 
 
 def _link_description(report: LinkReport) -> str:
     opt = report.options
+    u = opt.units
     status = report.status or "not checked"
     clearance = "n/a" if report.min_clearance is None else f"{report.min_clearance:.2f} \u00d7 r1"
+    if report.min_clearance_m is not None:
+        clearance += f" ({fmt_gap(report.min_clearance_m, u)})"
     if report.min_clearance_d_m is not None:
-        clearance += f" at {report.min_clearance_d_m / 1000:.2f} km"
+        clearance += f" at {fmt_distance(report.min_clearance_d_m, u, 2)}"
     lines = [
         f"Frequency: {opt.freq_ghz:g} GHz (\u03bb = {report.wavelength_m:.7f} m)",
-        f"Distance: {report.distance_m / 1000:.3f} km",
+        f"Distance: {fmt_distance(report.distance_m, u)}",
         f"Bearing A\u2192B: {report.bearing_ab:.1f}\u00b0, B\u2192A: {report.bearing_ba:.1f}\u00b0",
     ]
     if opt.zone != 1:
-        lines.append(f"Max r{opt.zone}: {report.zone_max_m:.2f} m")
+        lines.append(f"Max r{opt.zone}: {fmt_height(report.zone_max_m, u, 2)}")
     lines += [
-        f"Max r1: {report.r1_max_m:.2f} m, 0.6\u00b7r1: {report.r60_max_m:.2f} m",
+        f"Max r1: {fmt_height(report.r1_max_m, u, 2)}, 0.6\u00b7r1: {fmt_height(report.r60_max_m, u, 2)}",
         f"Min clearance: {clearance}",
         f"Status: {status}",
-        f"k = {opt.k:.4g}, clutter {opt.clutter_m:g} m",
+        f"k = {opt.k:.4g}, clutter {fmt_height(opt.clutter_m, u)}",
         "Elevation source: " + html.escape(", ".join(report.elevation_sources) or "none (heights given ASL)"),
         f"Zone color: {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",
     ]
@@ -225,12 +226,13 @@ def render_kml(report: LinkReport) -> str:
         _sub(ls, "tessellate", 1)
         _sub(ls, "altitudeMode", "clampToGround")
         _sub(ls, "coordinates", _coords([(p.lon, p.lat, 0.0) for p in report.profile]))
+        u = opt.units
         for p in report.obstructions:
             pm = _sub(tc, "Placemark")
-            _sub(pm, "name", f"c={p.clearance:.2f} @ {p.d_m / 1000:.2f} km")
-            _sub(pm, "description", f"Ground {p.ground_m:.1f} m, effective {p.effective_m:.1f} m, "
-                                    f"LOS {p.los_m:.1f} m, r1 {p.r1_m:.2f} m "
-                                    f"(needs {CLEAR_RATIO:.0%} = {CLEAR_RATIO * p.r1_m:.2f} m)")
+            _sub(pm, "name", f"c={p.clearance:.2f} @ {fmt_distance(p.d_m, u, 2)}")
+            _sub(pm, "description", f"Ground {fmt_height(p.ground_m, u)}, effective {fmt_height(p.effective_m, u)}, "
+                                    f"LOS {fmt_height(p.los_m, u)}, r1 {fmt_height(p.r1_m, u, 2)} "
+                                    f"(needs {CLEAR_RATIO:.0%} = {fmt_height(CLEAR_RATIO * p.r1_m, u, 2)})")
             _sub(pm, "styleUrl", "#obstruction")
             pt = _sub(pm, "Point")
             _sub(pt, "altitudeMode", "absolute")

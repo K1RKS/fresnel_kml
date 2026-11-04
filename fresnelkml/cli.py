@@ -13,6 +13,7 @@ from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationChain, ElevationUnavailable
 from .kml import render_kml
 from .parsing import FEET, RequestError, parse_site_string, read_sites_csv
+from .units import MILE, fmt_distance, fmt_gap, fmt_height
 from .webapi import safe_filename
 
 EXIT_INPUT = 2
@@ -108,31 +109,35 @@ def _chain_from_args(args, env) -> ElevationChain | None:
 
 def summary(report: LinkReport) -> str:
     opt = report.options
+    u = opt.units
     rows = []
     for s in (report.site_a, report.site_b):
         rows.append(f"  {s.name}: {format_position(s.lat, s.lon, opt.coord_display)} "
                     f"(from {s.position_format})")
-        ground = "unknown" if s.ground_m is None else f"{s.ground_m:.1f} m ({s.ground_source})"
-        agl = "unknown" if s.agl_m is None else f"{s.agl_m:.1f} m"
-        rows.append(f"    ground {ground}, AGL {agl}, ASL {s.asl_m:.1f} m")
+        ground = "unknown" if s.ground_m is None else f"{fmt_height(s.ground_m, u)} ({s.ground_source})"
+        rows.append(f"    ground {ground}, AGL {fmt_height(s.agl_m, u)}, ASL {fmt_height(s.asl_m, u)}")
     lines = [
         f"Fresnel {report.site_a.name} - {report.site_b.name} at {opt.freq_ghz:g} GHz",
         *rows,
-        f"  Distance {report.distance_m / 1000:.3f} km, bearing A->B {report.bearing_ab:.1f} deg, "
+        f"  Distance {fmt_distance(report.distance_m, u)}, bearing A->B {report.bearing_ab:.1f} deg, "
         f"B->A {report.bearing_ba:.1f} deg",
-        f"  Max r1 {report.r1_max_m:.2f} m, 0.6*r1 {report.r60_max_m:.2f} m"
-        + (f", max r{opt.zone} {report.zone_max_m:.2f} m" if opt.zone != 1 else ""),
+        f"  Max r1 {fmt_height(report.r1_max_m, u, 2)}, 0.6*r1 {fmt_height(report.r60_max_m, u, 2)}"
+        + (f", max r{opt.zone} {fmt_height(report.zone_max_m, u, 2)}" if opt.zone != 1 else ""),
         f"  Zone color {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",
     ]
     if report.terrain_checked:
-        c = "n/a" if report.min_clearance is None else f"{report.min_clearance:.2f}"
-        lines.append(f"  Terrain check: {report.status}, min clearance {c} x r1 "
-                     f"(k={opt.k:.4g}, clutter {opt.clutter_m:g} m)")
+        c = "n/a" if report.min_clearance is None else f"{report.min_clearance:.2f} x r1"
+        if report.min_clearance_m is not None:
+            c += f" ({fmt_gap(report.min_clearance_m, u)}) at {fmt_distance(report.min_clearance_d_m, u, 2)}"
+        lines.append(f"  Terrain check: {report.status}, min clearance {c}")
+        lines.append(f"    k={opt.k:.4g}, clutter {fmt_height(opt.clutter_m, u)}")
         if report.obstructions:
-            lines.append("    d (km)   ground   effective   LOS      r1     clearance")
+            h = 1 / FEET if u == "ft" else 1.0
+            dist_unit, dist_scale = ("mi", 1 / MILE) if u == "ft" else ("km", 1 / 1000)
+            lines.append(f"    d ({dist_unit})   ground   effective   LOS      r1     clearance   heights in {u}")
             for p in report.obstructions:
-                lines.append(f"    {p.d_m / 1000:7.3f}  {p.ground_m:7.1f}  {p.effective_m:9.1f}  "
-                             f"{p.los_m:7.1f}  {p.r1_m:6.2f}  {p.clearance:8.2f}")
+                lines.append(f"    {p.d_m * dist_scale:7.3f}  {p.ground_m * h:7.1f}  {p.effective_m * h:9.1f}  "
+                             f"{p.los_m * h:7.1f}  {p.r1_m * h:6.2f}  {p.clearance:8.2f}")
     else:
         lines.append("  Terrain check: not run")
     for w in report.warnings:
@@ -165,7 +170,7 @@ def main(argv=None, env=None) -> int:
                       clutter_m=args.clutter * (FEET if args.units == "ft" else 1.0),
                       elev_source=args.elev_source, stations=args.stations, ring_points=args.ring_points,
                       style=args.style, ring_every=args.ring_every, terrain_check=args.terrain_check,
-                      mode=args.mode, color=args.color, coord_display=args.coord_display)
+                      mode=args.mode, color=args.color, coord_display=args.coord_display, units=args.units)
         run_env = dict(env)
         if args.google_key:
             run_env["GOOGLE_ELEVATION_KEY"] = args.google_key

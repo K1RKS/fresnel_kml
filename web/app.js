@@ -219,6 +219,21 @@ function hfmt(metres, digits = 1) {
   return `${value.toFixed(digits)} ${resultUnits}`;
 }
 
+const MILE = 1609.344;
+
+// Short distances in m or ft, longer ones in km or miles.
+function dfmt(metres, digits = 3) {
+  if (resultUnits === "ft") {
+    const feet = metres / FEET;
+    return Math.abs(feet) < 1000 ? `${feet.toFixed(0)} ft` : `${(metres / MILE).toFixed(digits)} mi`;
+  }
+  return Math.abs(metres) < 1000 ? `${metres.toFixed(0)} m` : `${(metres / 1000).toFixed(digits)} km`;
+}
+
+function gapText(metres) {
+  return `terrain ${hfmt(Math.abs(metres))} ${metres >= 0 ? "below" : "above"} the line of sight`;
+}
+
 function updateUnitLabels() {
   const unit = $("#units").value;
   $$(".unit").forEach((el) => { el.textContent = unit; });
@@ -246,12 +261,13 @@ function showResult(data, units) {
     const ground = s.ground_m === null ? "unknown" : `${hfmt(s.ground_m)} (${s.ground_source})`;
     rows.push([esc(s.name), `${esc(s.display)} <small>(from ${esc(s.from)})</small><br>ground ${esc(ground)}, AGL ${hfmt(s.agl_m)}, ASL ${hfmt(s.asl_m)}`]);
   }
-  rows.push(["Distance", `${(r.distance_m / 1000).toFixed(3)} km`]);
+  rows.push(["Distance", dfmt(r.distance_m)]);
   rows.push(["Bearings", `A\u2192B ${r.bearing_ab.toFixed(1)}\u00b0, B\u2192A ${r.bearing_ba.toFixed(1)}\u00b0`]);
   rows.push(["Max r1 / 0.6\u00b7r1", `${hfmt(r.r1_max_m, 2)} / ${hfmt(r.r60_max_m, 2)}`]);
   if (r.zone !== 1) rows.push([`Max r${r.zone}`, hfmt(r.zone_max_m, 2)]);
   if (r.terrain_checked) {
-    const c = r.min_clearance === null ? "n/a" : `${r.min_clearance.toFixed(2)} \u00d7 r1 at ${(r.min_clearance_d_m / 1000).toFixed(2)} km`;
+    const c = r.min_clearance === null ? "n/a"
+      : `${r.min_clearance.toFixed(2)} \u00d7 r1 (${gapText(r.min_clearance_m)}) at ${dfmt(r.min_clearance_d_m, 2)}`;
     rows.push(["Min clearance", c]);
   }
   rows.push(["Elevation source", esc(r.elevation_sources.join(", ") || "none")]);
@@ -295,10 +311,10 @@ function drawProfile(r) {
   for (let i = 0; i <= 5; i++) {
     const d = (dMax * i) / 5;
     const anchor = i === 0 ? "start" : i === 5 ? "end" : "middle";
-    ticks.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${(d / 1000).toFixed(2)} km</text>`);
+    ticks.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${dfmt(d, 2)}</text>`);
   }
   const marks = p.filter((q) => q.clearance !== null && q.clearance < 0.6)
-    .map((q) => `<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} at ${(q.d_m / 1000).toFixed(2)} km</title></circle>`);
+    .map((q) => `<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)}</title></circle>`);
   svg.innerHTML = ticks.join("") + `<path class="ground" d="${ground}"/>` +
     `<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>` +
     `<path class="los" d="${line("los_m")}"/>` + marks.join("");
