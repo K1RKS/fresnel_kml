@@ -273,7 +273,7 @@ function esc(text) {
   return d.innerHTML;
 }
 
-function showResult(data, units, picks = []) {
+function showResult(data, units, picks = [], feedHeights = []) {
   resultUnits = units === "ft" ? "ft" : "m";
   const r = data.report;
   lastKml = data.kml;
@@ -314,7 +314,18 @@ function showResult(data, units, picks = []) {
   $("#swatch-text").textContent = `Zone color ${r.zone_color.hex} (${r.zone_color.random ? "random" : "chosen"})`;
   if (r.zone_color.random) $("#color").value = r.zone_color.hex;
 
-  $("#warnings").innerHTML = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  const warnings = [...(data.warnings || [])];
+  r.sites.forEach((s, i) => {
+    if (!feedHeights[i] || s.agl_m === null) return;
+    if (s.agl_m > TALL_AGL_M) {
+      warnings.push(`${s.name}: the antenna works out to ${hfmt(s.agl_m)} above ground. The node's antenna height `
+        + "may be incorrect unless it's on a high tower.");
+    } else if (s.height_ref === "asl" && s.agl_m < 0) {
+      warnings.push(`${s.name}: the node's antenna height of ${hfmt(s.asl_m)} can't be right either way: above sea level `
+        + `it's underground, and above ground it would be a ${hfmt(s.asl_m)} tower. Enter the real antenna height.`);
+    }
+  });
+  $("#warnings").innerHTML = warnings.map((w) => `<li>${esc(w)}</li>`).join("");
   drawProfile(r);
   $("#result").hidden = false;
   drawMap(r);
@@ -511,6 +522,7 @@ async function submit(ev) {
   $("#busy").hidden = false;
   const request = buildRequest();
   const picks = [pickedNode("site_a"), pickedNode("site_b")];
+  const feedHeights = SITE_KEYS.map(feedHeight);
   try {
     const resp = await fetch(API, {
       method: "POST",
@@ -527,7 +539,7 @@ async function submit(ev) {
       showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
       return;
     }
-    showResult(data, request.options.units, picks);
+    showResult(data, request.options.units, picks, feedHeights);
   } catch (err) {
     showError(err.message || String(err));
   } finally {

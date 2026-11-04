@@ -17,6 +17,9 @@ const FIELD_LABELS = { name: "name", lat: "latitude", lon: "longitude", height_m
 const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref", gnd: "ground_m" };
 // Tree inputs, kept as typed: they are in the page's height units, which are saved alongside.
 const TREE_FIELDS = { th: "tree_height", ta: "tree_clearance_a", tb: "tree_clearance_b" };
+// AREDN's antenna height is above ground, but some nodes enter their height above sea level there.
+const TALL_AGL_M = 100 * 0.3048;  // warn when the computed height above ground is over this
+const ASL_GUESS_M = 200 * 0.3048;  // above this, take the height as above sea level
 
 // link: in link selection, the RF link chosen for Site B when its node has no location in the feed.
 function blankSite() {
@@ -173,8 +176,21 @@ function refreshOverrides(key) {
       : `The node feed is unavailable; using the saved values for ${node.name}.`;
   }
   if (!hasHeight(node)) text += " No antenna height in the feed; enter it.";
-  if (changed.length) text += ` Changed from ${node.name}: ${changed.join(", ")}. Clear a field to restore it.`;
+  else if (!("height_m" in s.ov)) text += heightNote(node, s.ov.height_ref === "asl");
+  if (changed.length) text += ` Changed from ${node.name}: ${changed.join(", ")}. Clear a field or set it back to restore it.`;
   note.textContent = text;
+}
+
+function heightNote(node, asl) {
+  if (!asl || !(node.height_m > ASL_GUESS_M)) return "";
+  return ` Its antenna height of ${describeValue("height_m", node.height_m)} is over ${describeValue("height_m", ASL_GUESS_M)},`
+    + " so it's taken as height above sea level (AREDN asks for height above ground). Set it back to above ground"
+    + " if the tower really is that tall.";
+}
+
+// The site's antenna height is the picked node's own value from the feed.
+function feedHeight(key) {
+  return hasHeight(pickedNode(key)) && !("height_m" in siteState.sites[key].ov);
 }
 
 // Put the node's values (or the saved manual values) plus any overrides into the form.
@@ -238,7 +254,7 @@ function pickSite(key, node) {
   s.node = node.id;
   s.snap = node;
   s.link = null;
-  s.ov = {};
+  s.ov = hasHeight(node) && node.height_m > ASL_GUESS_M ? { height_ref: "asl" } : {};
   delete missingNotes[key];
   siteState.freq_ov = null;
   $("#error").hidden = true;
