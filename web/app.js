@@ -33,10 +33,58 @@ function setupSite(fs) {
     updateLookupHint();
   });
   $$("input[data-axis]", fs).forEach((input) => {
-    input.addEventListener("change", () => decodeField(fs, input));
-    input.addEventListener("input", () => input.classList.remove("invalid"));
+    const axis = input.dataset.axis;
+    const handle = async () => {
+      if (!axis || !(await splitPosition(fs, input))) decodeField(fs, input);
+    };
+    input.addEventListener("change", handle);
+    input.addEventListener("input", (ev) => {
+      input.classList.remove("invalid");
+      if (axis && ev.inputType === "insertFromPaste") handle();
+    });
   });
   $("input[name=ground]", fs).addEventListener("input", updateLookupHint);
+}
+
+async function parseText(text, axis) {
+  const params = new URLSearchParams({ parse: text });
+  if (axis) params.set("axis", axis);
+  const resp = await fetch(`${API}?${params}`);
+  return resp.ok ? resp.json() : null;
+}
+
+// When a whole position (e.g. "37.0341, -122.0833") lands in the Latitude or
+// Longitude field, put its first part in Latitude and its second in Longitude.
+async function splitPosition(fs, input) {
+  const text = input.value.trim();
+  if (!text || DECIMAL_RE.test(text)) return false;
+  const latIn = $("input[name=lat]", fs);
+  const lonIn = $("input[name=lon]", fs);
+  const parts = text.split(/[,;]/).map((s) => s.trim());
+  const textPair = parts.length === 2 && parts.every(Boolean) && !/^geo:/i.test(text);
+  let position = null;
+  try {
+    if (await parseText(text, input.dataset.axis)) return false;  // a valid single coordinate
+    position = await parseText(text, "");
+  } catch (err) {
+    /* server unreachable: fall back to splitting on the comma */
+  }
+  if (!position && !textPair) return false;
+  if (textPair && (!position || ["decimal", "dms", "ddm", "mixed"].includes(position.format))) {
+    latIn.value = parts[0];
+    lonIn.value = parts[1];
+  } else {
+    latIn.value = position.lat.toFixed(7);
+    lonIn.value = position.lon.toFixed(7);
+  }
+  latIn.classList.remove("invalid");
+  lonIn.classList.remove("invalid");
+  const out = $(".decoded", fs);
+  out.classList.remove("bad");
+  out.textContent = position
+    ? `Split into latitude and longitude: = ${position.display} (from ${position.format})`
+    : "Split into latitude and longitude.";
+  return true;
 }
 
 async function decodeField(fs, input) {

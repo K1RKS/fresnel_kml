@@ -124,6 +124,7 @@ location = /site/api/fresnel.cgi {
   - Those fields also accept DMS, DDM and hemisphere-letter forms.
   - A "Paste position" link swaps in a single field for whole-position formats such as a lat,lon pair, UTM, MGRS, Maidenhead or Plus code.
   - When a field loses focus, the page calls `?parse` and shows the decoded value in decimal under it (for example `= 37.034167, -122.083333 (from DMS)`), or the error message.
+  - If a whole position is pasted or typed into the Latitude or Longitude field, the page splits it: the first part goes to Latitude and the second to Longitude. A comma-separated pair keeps its original text in each field; other position formats (space-separated pairs, UTM, MGRS, geo URIs and so on) are filled in as decimal degrees. Text that is already a valid single coordinate, such as `37 02 03 N`, is left alone.
 - A "Show positions as" choice for the results (Decimal by default, DMS or DDM), sent as `coord_display`.
 - A hint under the toggles. If both sites use above sea level and the terrain check is off, it says no elevation lookup will be made.
 - A "Zone color" control: a "Random" checkbox, checked by default, next to an `<input type="color">` picker. The picker is disabled while "Random" is checked.
