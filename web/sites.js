@@ -130,6 +130,7 @@ function syncOverrides(key) {
     }
   }
   refreshOverrides(key);
+  scheduleGround(key);
   save();
 }
 
@@ -216,6 +217,76 @@ function applySite(key) {
   $(".decoded", fs).textContent = "";
   syncSiteName(key);
   refreshOverrides(key);
+  scheduleGround(key);
+}
+
+// ----- Ground elevation from the lookup, shown for reference -----
+
+const groundCache = new Map();  // query string -> lookup result, { pending }, or { error, retry }
+const groundTimers = {};
+
+function groundQuery(key) {
+  const fs = siteFieldset(key);
+  const p = new URLSearchParams({ ground: "" });
+  if (usesSinglePosition(fs)) {
+    const pos = $("input[name=position]", fs).value.trim();
+    if (!pos) return null;
+    p.set("position", pos);
+  } else {
+    const lat = $("input[name=lat]", fs).value.trim();
+    const lon = $("input[name=lon]", fs).value.trim();
+    if (!lat || !lon) return null;
+    p.set("lat", lat);
+    p.set("lon", lon);
+  }
+  const source = $("#elev_source").value;
+  if (source && source !== "auto") p.set("source", source);
+  return p.toString();
+}
+
+function scheduleGround(key) {
+  clearTimeout(groundTimers[key]);
+  showGround(key);
+  const q = groundQuery(key);
+  const known = q !== null && groundCache.get(q);
+  if (q === null || (known && !known.retry)) return;
+  groundTimers[key] = setTimeout(() => fetchGround(q), 600);
+}
+
+async function fetchGround(q) {
+  groundCache.set(q, { pending: true });
+  SITE_KEYS.forEach(showGround);
+  try {
+    const resp = await fetch(`${API}?${q}`);
+    const data = await resp.json();
+    if (resp.ok) groundCache.set(q, data);
+    else groundCache.set(q, { error: resp.status === 400 ? "check the position" : data.error, retry: resp.status !== 400 });
+  } catch (err) {
+    groundCache.set(q, { error: "the server couldn't be reached", retry: true });
+  }
+  SITE_KEYS.forEach(showGround);
+}
+
+function showGround(key) {
+  const fs = siteFieldset(key);
+  const el = $(".ground-est", fs);
+  const q = groundQuery(key);
+  const g = q === null ? null : groundCache.get(q);
+  if (q === null) {
+    el.textContent = "";
+  } else if (!g || g.pending) {
+    el.textContent = "Ground here (lookup): looking up\u2026";
+  } else if (g.error) {
+    el.textContent = `Ground here (lookup): unavailable (${g.error})`;
+  } else {
+    let text = `Ground here (lookup): ${describeValue("ground_m", g.ground_m)} from ${g.source}`;
+    const height = readField(fs, "height_m");
+    if ($("select[name=height_ref]", fs).value === "asl" && height !== null && Number.isFinite(height)) {
+      const agl = height - g.ground_m;
+      text += `; the antenna is ${describeValue("height_m", Math.abs(agl))} ${agl >= 0 ? "above" : "below"} it`;
+    }
+    el.textContent = text;
+  }
 }
 
 function defaultFreqGhz() {
@@ -754,6 +825,7 @@ function initSites() {
     syncFreq();
   });
   $("#copy-link").addEventListener("click", copyLink);
+  $("#elev_source").addEventListener("change", () => SITE_KEYS.forEach(scheduleGround));
   $("#trees").addEventListener("change", save);
   for (const id of Object.values(TREE_FIELDS)) $(`#${id}`).addEventListener("input", save);
   restoring = fromUrl() || loadSaved();

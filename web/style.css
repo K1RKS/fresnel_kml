@@ -56,8 +56,8 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .mode-bar .linkish { margin-top: 0; }
 #copy-status { font-size: 0.82rem; color: var(--clear); }
 input.overridden:not([type=checkbox]), select.overridden { border-color: var(--marginal); background: #fff6e5; }
-.node-note { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
-.node-note:empty { display: none; }
+.node-note, .ground-est { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+.node-note:empty, .ground-est:empty { display: none; }
 .link-pick select { width: 100%; }
 .node-pick { position: relative; }
 .node-list {

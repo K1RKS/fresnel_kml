@@ -46,6 +46,7 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Options** (all optional): `freq_ghz`, `zone`, `sixty`, `k`, `clutter_m`, `elev_source`, `stations`, `ring_points`, `style` (`mesh`/`rings`), `ring_every`, `terrain_check` (`true`/`false`/`null` = only when a lookup is needed anyway), `mode` (`absolute`/`relative`), `units` (`m`/`ft`), `color` (`random`, `#RRGGBB`, `#RRGGBBAA` or a name), `coord_display` (`decimal`/`dms`/`ddm`).
 - **Response**: the KML file as a download, or `{"kml", "report", "warnings"}` with `"format": "json"`. Errors are JSON `{"error", "field"}` with status 400, 405, 413, 502 (no elevation available) or 504.
 - `GET ?sources` lists the configured elevation sources; `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
+- `GET ?ground&lat=LAT&lon=LON` (or `&position=TEXT`, plus an optional `&source=NAME`) looks up the ground elevation at one point and returns `{"lat", "lon", "ground_m", "source", "assumed_zero"}`.
 - `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
 
 ### Mesh node picker
@@ -58,6 +59,8 @@ When the server has a Nodographer feed configured (by default the [K1RKS MeshMap
 A picked node fills the name, position, antenna height above ground and the link frequency. These are defaults: a field you change is highlighted in amber, its tooltip shows the node's value, and the site's note lists what you changed. Clearing a changed field puts the node's value back. Emptying the Mesh node box drops the pick and keeps the values as plain manual entry. Switching the height units converts picked heights, overrides included.
 
 AREDN's antenna height is meant to be above ground, but some nodes have their height above sea level entered there. When a picked node's height is over 200 ft (61 m), picking the node switches "Height is" to "above sea level", highlighted as a change; set it back to "above ground" if the tower really is that tall. If a node's height still works out to more than 100 ft (30.5 m) above the ground, the results warn that it may be incorrect unless the antenna is on a high tower. If taking it as above sea level puts the antenna underground, the results say the node's height can't be right either way and needs entering by hand.
+
+Under each site's heights, "Ground here (lookup)" shows what the elevation lookup gives for that position (using the chosen elevation source), and for a height above sea level, how far the antenna is above or below that ground. It's for reference only: the "Ground elevation" box still overrides the lookup for a height above ground.
 
 The page remembers the mode, the picks, your changes and the tree settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 

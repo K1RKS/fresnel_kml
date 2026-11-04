@@ -84,6 +84,33 @@ def test_502_when_elevation_unavailable(tmp_path, monkeypatch):
     assert "asl_m" in json.loads(resp.body)["error"]
 
 
+def test_ground_lookup(local_config):
+    env = {"FRESNEL_CONFIG": local_config}
+    resp = handle_request("GET", "ground&lat=37.5&lon=-121.5", env=env)
+    assert resp.status == 200
+    data = json.loads(resp.body)
+    assert data["lat"] == 37.5 and data["lon"] == -121.5
+    assert data["source"].startswith("local") and not data["assumed_zero"]
+    assert isinstance(data["ground_m"], float)
+    by_dms = json.loads(handle_request("GET", "ground&lat=37%C2%B030'N&lon=121%C2%B030'W", env=env).body)
+    assert by_dms["ground_m"] == data["ground_m"]
+    named = handle_request("GET", "ground&lat=37.5&lon=-121.5&source=local", env=env)
+    assert json.loads(named.body)["ground_m"] == data["ground_m"]
+
+
+@pytest.mark.parametrize("query,status,field", [
+    ("ground&lat=95&lon=0", 400, "ground.lat"),
+    ("ground&lat=37.5", 400, "ground.lat"),
+    ("ground&lat=37.5&lon=-121.5&source=nope", 400, "source"),
+    ("ground&lat=10&lon=10", 502, None),
+])
+def test_ground_lookup_errors(local_config, query, status, field):
+    resp = handle_request("GET", query, env={"FRESNEL_CONFIG": local_config})
+    assert resp.status == status
+    data = json.loads(resp.body)
+    assert data["error"] and data.get("field") == field
+
+
 def test_google_key_in_request_is_ignored(monkeypatch, tmp_path):
     seen = []
 

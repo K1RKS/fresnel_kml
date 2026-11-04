@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 
 from . import __version__
 from .analysis import AnalysisError, analyze
-from .config import ConfigError, load_config
+from .config import ConfigError, build_chain, load_config
 from .coords import LAT, LON, CoordinateError, format_position, parse_coordinate, parse_position
 from .elevation import ElevationUnavailable
 from .kml import render_kml
 from .nodes import load_nodes
-from .parsing import RequestError, parse_request
+from .parsing import RequestError, parse_request, resolve_position
 
 MAX_BODY = 16 * 1024
 KML_TYPE = "application/vnd.google-earth.kml+xml; charset=utf-8"
@@ -37,6 +37,7 @@ USAGE = {
         "GET ?map": "list the configured map tile servers",
         "GET ?nodes": "list mesh nodes from the configured Nodographer feeds",
         "GET ?parse=TEXT[&axis=lat|lon]": "decode a coordinate or position to decimal degrees",
+        "GET ?ground&lat=LAT&lon=LON (or &position=TEXT)[&source=NAME]": "look up the ground elevation at one point",
     },
 }
 
@@ -71,8 +72,35 @@ def safe_filename(a: str, b: str) -> str:
     return stem[:120] + ".kml"
 
 
+def _ground(params: dict, env) -> Response:
+    one = {k: v[0] for k, v in params.items()}
+    try:
+        lat, lon, _, _ = resolve_position("ground", lat=one.get("lat"), lon=one.get("lon"),
+                                          position=one.get("position"))
+    except RequestError as exc:
+        return _error(400, str(exc), exc.field)
+    try:
+        cfg = load_config(env=env)
+    except ConfigError as exc:
+        return _error(500, f"Server configuration error: {exc}")
+    source = one.get("source") or "auto"
+    try:
+        chain = build_chain(cfg, only=source, env=env)
+    except KeyError:
+        return _error(400, f"Unknown elevation source '{source}'.", "source")
+    try:
+        found = chain.lookup([(lat, lon)])[0]
+    except ElevationUnavailable as exc:
+        return _error(502, f"{exc}.")
+    body = json.dumps({"lat": round(lat, 7), "lon": round(lon, 7), "ground_m": round(found.elevation, 2),
+                       "source": found.source, "assumed_zero": found.assumed_zero}).encode("utf-8")
+    return Response(200, body, [("Content-Type", JSON_TYPE), ("Cache-Control", "max-age=86400")])
+
+
 def _get(query: str, env) -> Response:
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    if "ground" in params:
+        return _ground(params, env)
     if "sources" in params or "map" in params or "nodes" in params:
         try:
             cfg = load_config(env=env)
