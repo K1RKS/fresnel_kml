@@ -119,6 +119,17 @@ def test_failure_without_cache(tmp_path, monkeypatch):
     assert warnings == ["Main: feed unavailable (response has no nodeInfo list)."]
 
 
+def test_connection_error_reason_is_short(tmp_path, monkeypatch):
+    def refused(*a, **k):
+        raise httpjson.HttpError(
+            "https://mesh.example/nodes.json: HTTPSConnectionPool(host='mesh.example', port=443): Max retries "
+            "exceeded with url: /nodes.json (Caused by NewConnectionError(\"HTTPSConnection(host='mesh.example', "
+            "port=443): Failed to establish a new connection: [Errno 111] Connection refused\"))")
+
+    monkeypatch.setattr(httpjson, "get_json", refused)
+    assert load_nodes(config(tmp_path))[2] == ["Main: feed unavailable (Connection refused)."]
+
+
 def test_no_feeds_makes_no_requests(tmp_path):
     assert load_nodes(config(tmp_path, feeds=[])) == ([], [], [])
 

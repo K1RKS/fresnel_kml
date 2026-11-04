@@ -122,6 +122,14 @@ def _ago(seconds: float) -> str:
     return f"{minutes // 60} h ago"
 
 
+def _reason(exc: Exception, url: str) -> str:
+    text = str(exc).replace(url, "").lstrip(": ")
+    errno = re.search(r"\[Errno -?\d+\] ([^'\")\]]+)", text)
+    if errno:
+        return errno.group(1).strip().rstrip(".")
+    return (text[:97] + "...") if len(text) > 100 else (text or "unreachable")
+
+
 def _load_feed(feed: dict, config, now: float) -> tuple[dict | None, str | None]:
     path = _cache_path(config.cache_dir, feed["url"])
     cached = _read_cache(path, feed["url"])
@@ -131,7 +139,7 @@ def _load_feed(feed: dict, config, now: float) -> tuple[dict | None, str | None]
     try:
         nodes, generated = slim_feed(httpjson.get_json(feed["url"], timeout=timeout))
     except (httpjson.HttpError, ValueError) as exc:
-        reason = str(exc).replace(feed["url"], "").lstrip(": ") or "unreachable"
+        reason = _reason(exc, feed["url"])
         if cached:
             return cached, f"{feed['name']}: feed unavailable ({reason}), showing data from {_ago(now - cached['fetched'])}."
         return None, f"{feed['name']}: feed unavailable ({reason})."
