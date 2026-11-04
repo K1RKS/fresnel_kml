@@ -22,7 +22,7 @@ def stamp_assets(site: str) -> None:
     index = os.path.join(site, "index.html")
     with open(index, encoding="utf-8") as fh:
         html = fh.read()
-    for asset in ("app.js", "style.css"):
+    for asset in ("app.js", "sites.js", "style.css"):
         with open(os.path.join(site, asset), "rb") as fh:
             digest = hashlib.sha256(fh.read()).hexdigest()[:10]
         html = html.replace(f'"{asset}"', f'"{asset}?v={digest}"')

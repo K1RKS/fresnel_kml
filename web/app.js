@@ -36,6 +36,7 @@ function setupSite(fs) {
     const axis = input.dataset.axis;
     const handle = async () => {
       if (!axis || !(await splitPosition(fs, input))) decodeField(fs, input);
+      syncOverrides(fs.dataset.site);
     };
     input.addEventListener("change", handle);
     input.addEventListener("input", () => input.classList.remove("invalid"));
@@ -148,239 +149,6 @@ function updateLookupHint() {
     notes.push(`The two nodes report different frequencies (${pa.freq_mhz} vs ${pb.freq_mhz} MHz).`);
   }
   $("#lookup-hint").innerHTML = esc(text) + notes.map((n) => `<span class="warn">${esc(n)}</span>`).join("");
-}
-
-// ----- Mesh node picker (Nodographer feeds via GET ?nodes) -----
-
-let meshNodes = [];
-const nodeById = new Map();
-let nodeWarnings = [];
-const MAX_MATCHES = 20;
-
-function otherKey(key) {
-  return key === "site_a" ? "site_b" : "site_a";
-}
-
-function pickedNode(key) {
-  const id = siteFieldset(key).dataset.nodeId;
-  return id ? nodeById.get(id) || null : null;
-}
-
-function clearPick(fs) {
-  if (!fs.dataset.nodeId) return;
-  delete fs.dataset.nodeId;
-  delete fs.dataset.heightAuto;
-  $("input[name=node_search]", fs).value = "";
-  updateLookupHint();
-}
-
-function setPickedHeight(fs, node) {
-  const units = $("#units").value;
-  const value = units === "ft" ? node.height_m / FEET : node.height_m;
-  $("input[name=height]", fs).value = String(Number(value.toFixed(1)));
-}
-
-function fillSite(fs, node) {
-  if (usesSinglePosition(fs)) $(".toggle-pos", fs).click();
-  const nameIn = $("input[name=name]", fs);
-  nameIn.value = node.name;
-  nameIn.dispatchEvent(new Event("input"));
-  for (const axis of ["lat", "lon"]) {
-    const input = $(`input[name=${axis}]`, fs);
-    input.value = node[axis].toFixed(7);
-    input.classList.remove("invalid");
-  }
-  const hasHeight = node.height_m !== null && node.height_m !== undefined;
-  if (hasHeight) {
-    setPickedHeight(fs, node);
-    $("input[name=height]", fs).classList.remove("invalid");
-    $("input[name=ground]", fs).value = "";
-    const ref = $("select[name=height_ref]", fs);
-    ref.value = "agl";
-    ref.dispatchEvent(new Event("change"));
-  }
-  if (node.freq_mhz) $("#freq_ghz").value = String(Number((node.freq_mhz / 1000).toFixed(4)));
-  const out = $(".decoded", fs);
-  out.classList.remove("bad");
-  out.textContent = `From mesh node ${node.name}${node.antenna ? ` (${node.antenna})` : ""}.`
-    + (hasHeight ? "" : " No antenna height in the feed; enter it.");
-  fs.dataset.nodeId = node.id;
-  if (hasHeight) fs.dataset.heightAuto = "1";
-  else delete fs.dataset.heightAuto;
-  $("input[name=node_search]", fs).value = node.name;
-  updateLookupHint();
-}
-
-function nodeExtra(node) {
-  const units = $("#units").value;
-  const parts = [];
-  if (node.height_m !== null && node.height_m !== undefined) parts.push(`Ht ${hfmt(node.height_m, 0, units)}`);
-  if (node.freq_mhz) parts.push(`${node.freq_mhz} MHz`);
-  return parts.join(" \u00b7 ");
-}
-
-// Rows for the dropdown: the other site's RF links first, then name matches.
-function suggestions(key, query) {
-  const q = query.trim().toLowerCase();
-  const other = pickedNode(otherKey(key));
-  const self = pickedNode(key);
-  const rows = [];
-  const shown = new Set(self ? [self.id] : []);
-  if (other) {
-    const units = $("#units").value;
-    const near = other.links
-      .filter((l) => l.type === "RF" && nodeById.has(l.id) && l.id !== other.id && !shown.has(l.id))
-      .map((l) => ({ node: nodeById.get(l.id), link: l }))
-      .filter(({ node }) => !q || node.name.toLowerCase().includes(q))
-      .sort((x, y) => (x.link.distance_km ?? Infinity) - (y.link.distance_km ?? Infinity));
-    if (near.length) {
-      rows.push({ group: `RF links of ${other.name}` });
-      for (const { node, link } of near) {
-        const where = [link.distance_km !== null ? dfmt(link.distance_km * 1000, 1, units) : null,
-          link.bearing_deg !== null ? `${link.bearing_deg.toFixed(0)}\u00b0` : null].filter(Boolean).join(", ");
-        rows.push({ node, extra: [where, nodeExtra(node)].filter(Boolean).join(" \u00b7 ") });
-        shown.add(node.id);
-      }
-    }
-  }
-  if (q) {
-    const matches = meshNodes.filter((n) => !shown.has(n.id) && n.name.toLowerCase().includes(q));
-    matches.sort((x, y) => Number(!x.name.toLowerCase().startsWith(q)) - Number(!y.name.toLowerCase().startsWith(q)));
-    if (rows.length && matches.length) rows.push({ group: "All nodes" });
-    for (const node of matches.slice(0, MAX_MATCHES)) rows.push({ node, extra: nodeExtra(node) });
-    if (!matches.length && !rows.length) rows.push({ empty: "No matching node" });
-  }
-  return rows;
-}
-
-function markMatch(name, q) {
-  const at = q ? name.toLowerCase().indexOf(q) : -1;
-  if (at < 0) return esc(name);
-  return esc(name.slice(0, at)) + `<b>${esc(name.slice(at, at + q.length))}</b>` + esc(name.slice(at + q.length));
-}
-
-function setupPicker(key) {
-  const fs = siteFieldset(key);
-  const input = $("input[name=node_search]", fs);
-  const list = $(".node-list", fs);
-  let rows = [];
-  let active = -1;
-  let typed = "";  // what the user typed, without the inline completion
-
-  const completing = () => input.selectionStart === typed.length && input.selectionEnd > typed.length;
-  // Show the rest of the active row's name, selected, so typing over it keeps filtering.
-  const complete = () => {
-    const row = rows[active];
-    const q = typed.trim().toLowerCase();
-    if (q && row && row.node && row.node.name.toLowerCase().startsWith(typed.toLowerCase())) {
-      input.value = typed + row.node.name.slice(typed.length);
-      input.setSelectionRange(typed.length, input.value.length);
-    } else if (input.value !== typed) {
-      input.value = typed;
-    }
-  };
-  const close = () => {
-    list.hidden = true;
-    input.setAttribute("aria-expanded", "false");
-    active = -1;
-  };
-  const highlight = () => {
-    $$("li", list).forEach((li) => {
-      const on = Number(li.dataset.index) === active;
-      li.classList.toggle("active", on);
-      li.setAttribute("aria-selected", on ? "true" : "false");
-      if (on) li.scrollIntoView({ block: "nearest" });
-    });
-  };
-  const open = (autocomplete = false) => {
-    rows = suggestions(key, typed);
-    const q = typed.trim().toLowerCase();
-    const prefix = q ? rows.findIndex((r) => r.node && r.node.name.toLowerCase().startsWith(typed.toLowerCase())) : -1;
-    active = prefix >= 0 ? prefix : rows.findIndex((r) => r.node);
-    if (!rows.length) return close();
-    list.innerHTML = rows.map((r, i) => {
-      if (r.group) return `<li class="group" role="presentation">${esc(r.group)}</li>`;
-      if (r.empty) return `<li class="empty" role="presentation">${esc(r.empty)}</li>`;
-      return `<li role="option" data-index="${i}"><span>${markMatch(r.node.name, q)}</span><small>${esc(r.extra)}</small></li>`;
-    }).join("");
-    list.hidden = false;
-    input.setAttribute("aria-expanded", "true");
-    highlight();
-    if (autocomplete && prefix >= 0) complete();
-  };
-  const choose = (i) => {
-    const row = rows[i];
-    if (!row || !row.node) return;
-    close();
-    fillSite(fs, row.node);
-    typed = input.value;
-  };
-  const step = (dir) => {
-    const idx = rows.map((r, i) => (r.node ? i : -1)).filter((i) => i >= 0);
-    if (!idx.length) return;
-    const pos = idx.indexOf(active);
-    active = idx[(pos + dir + idx.length) % idx.length];
-    highlight();
-    complete();
-  };
-
-  input.addEventListener("input", (ev) => {
-    typed = input.value;
-    // Deleting must not re-add the completion the user just removed
-    open(!(ev.inputType || "").startsWith("delete"));
-  });
-  input.addEventListener("focus", () => { typed = input.value; open(); });
-  input.addEventListener("click", () => { if (list.hidden) { typed = input.value; open(); } });
-  input.addEventListener("blur", () => {
-    if (completing()) input.value = typed;
-    setTimeout(close, 150);
-  });
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-      ev.preventDefault();
-      if (list.hidden) open();
-      else step(ev.key === "ArrowDown" ? 1 : -1);
-    } else if (ev.key === "Enter" || (ev.key === "Tab" && !ev.shiftKey && completing())) {
-      if (!list.hidden && active >= 0) {
-        ev.preventDefault();
-        choose(active);
-      }
-    } else if (ev.key === "Escape") {
-      if (completing()) input.value = typed;
-      close();
-    }
-  });
-  list.addEventListener("mousedown", (ev) => {
-    const li = ev.target.closest("li[data-index]");
-    if (!li) return;
-    ev.preventDefault();
-    choose(Number(li.dataset.index));
-  });
-
-  for (const name of ["lat", "lon", "position"]) {
-    const field = $(`input[name=${name}]`, fs);
-    field.addEventListener("input", () => clearPick(fs));
-    field.addEventListener("paste", () => clearPick(fs));
-  }
-  $(".toggle-pos", fs).addEventListener("click", (ev) => { if (ev.isTrusted) clearPick(fs); });
-  $("input[name=height]", fs).addEventListener("input", () => { delete fs.dataset.heightAuto; });
-  $("select[name=height_ref]", fs).addEventListener("change", (ev) => { if (ev.isTrusted) delete fs.dataset.heightAuto; });
-}
-
-async function loadNodes() {
-  let data;
-  try {
-    const resp = await fetch(`${API}?nodes`);
-    if (!resp.ok) return;
-    data = await resp.json();
-  } catch (err) {
-    return;  /* no feeds: the pickers stay hidden */
-  }
-  meshNodes = data.nodes || [];
-  meshNodes.forEach((n) => nodeById.set(n.id, n));
-  nodeWarnings = data.warnings || [];
-  if (meshNodes.length) $$(".node-pick").forEach((el) => { el.hidden = false; });
-  updateLookupHint();
 }
 
 // How far each picked node's antenna azimuth is from the bearing to the other site.
@@ -733,6 +501,11 @@ async function submit(ev) {
   ev.preventDefault();
   $("#error").hidden = true;
   $$("input.invalid").forEach((i) => i.classList.remove("invalid"));
+  const problem = sitesProblem();
+  if (problem) {
+    showError(problem);
+    return;
+  }
   const btn = $("#generate");
   btn.disabled = true;
   $("#busy").hidden = false;
@@ -794,27 +567,25 @@ async function loadSources() {
   }
 }
 
+function syncSiteName(key) {
+  const name = $("input[name=name]", siteFieldset(key)).value.trim();
+  $(`.site-name[data-site=${key}]`).textContent = name || (key === "site_a" ? "Site A" : "Site B");
+}
+
 function init() {
   ["site_a", "site_b"].forEach((k) => setupSite(siteFieldset(k)));
-  ["site_a", "site_b"].forEach(setupPicker);
   $("#color_random").addEventListener("change", (e) => { $("#color").disabled = e.target.checked; });
   $("#terrain_check").addEventListener("change", updateLookupHint);
   $("#units").addEventListener("change", () => {
     updateUnitLabels();
-    for (const key of ["site_a", "site_b"]) {
-      const fs = siteFieldset(key);
-      const node = pickedNode(key);
-      if (node && fs.dataset.heightAuto) setPickedHeight(fs, node);
-    }
+    unitsChanged();
   });
   $("#trees").addEventListener("change", (e) => {
     for (const id of ["#tree_height", "#tree_clearance_a", "#tree_clearance_b"]) $(id).disabled = !e.target.checked;
   });
   for (const key of ["site_a", "site_b"]) {
-    const nameInput = $("input[name=name]", siteFieldset(key));
-    const sync = () => { $(`.site-name[data-site=${key}]`).textContent = nameInput.value.trim() || (key === "site_a" ? "Site A" : "Site B"); };
-    nameInput.addEventListener("input", sync);
-    sync();
+    $("input[name=name]", siteFieldset(key)).addEventListener("input", () => syncSiteName(key));
+    syncSiteName(key);
   }
   updateUnitLabels();
   $("#link-form").addEventListener("submit", submit);
@@ -824,7 +595,7 @@ function init() {
   updateLookupHint();
   loadSources();
   loadMapConfig();
-  loadNodes();
+  initSites();
 }
 
 init();

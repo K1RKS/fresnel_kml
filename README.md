@@ -50,7 +50,14 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 
 ### Mesh node picker
 
-When the server has a Nodographer feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), each site gets a "Mesh node" box. As you type, matching nodes are listed with the match in bold, and the first name that starts with what you typed is completed in the box; Tab or Enter accepts it, and the arrow keys or the mouse pick another. Picking a node fills the name, position, antenna height above ground and the link frequency. Once one site is picked, the other site's list starts with that node's RF links, nearest first. Editing the position by hand drops the pick; editing the height keeps the pick but stops it refilling the height when the units change.
+When the server has a Nodographer feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), two tabs appear above the sites:
+
+- **Node selection:** each site gets a "Mesh node" box. As you type, matching nodes are listed with the match in bold, and the first name that starts with what you typed is completed in the box; Tab or Enter accepts it, and the arrow keys or the mouse pick another. Once one site is picked, the other site's list starts with that node's RF links, nearest first. You can still type a site by hand without picking a node.
+- **Link selection:** Site A must be a mesh node, and Site B is chosen from a "Link from" list of Site A's RF links (nearest first, with distance, bearing and signal). Choosing a link fills Site B and sets the frequency from Site A. Links to nodes the feed has no position for are listed but can't be chosen.
+
+A picked node fills the name, position, antenna height above ground and the link frequency. These are defaults: a field you change is highlighted in amber, its tooltip shows the node's value, and the site's note lists what you changed. Clearing a changed field puts the node's value back. Emptying the Mesh node box drops the pick and keeps the values as plain manual entry. Switching the height units converts picked heights, overrides included.
+
+The page remembers the mode, the picks and your changes in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
 For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 

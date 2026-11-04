@@ -48,6 +48,17 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .hint { font-size: 0.85rem; color: var(--muted); margin: 8px 0 0; }
 .hint .warn { color: var(--marginal); display: block; }
 
+.mode-bar { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin: 0 0 12px; }
+.mode-tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card); }
+.mode-tabs button { border: none; background: none; padding: 7px 16px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.mode-tabs button + button { border-left: 1px solid var(--line); }
+.mode-tabs button.active { background: var(--accent); color: #fff; }
+.mode-bar .linkish { margin-top: 0; }
+#copy-status { font-size: 0.82rem; color: var(--clear); }
+input.overridden:not([type=checkbox]), select.overridden { border-color: var(--marginal); background: #fff6e5; }
+.node-note { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+.node-note:empty { display: none; }
+.link-pick select { width: 100%; }
 .node-pick { position: relative; }
 .node-list {
   position: absolute; z-index: 1000; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 4px 0;

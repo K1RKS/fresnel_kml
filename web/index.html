@@ -14,7 +14,15 @@
 </header>
 
 <main>
-<form id="link-form" novalidate>
+<form id="link-form" novalidate autocomplete="off">
+  <div class="mode-bar">
+    <div class="mode-tabs" role="tablist" aria-label="How to choose the sites" hidden>
+      <button type="button" role="tab" data-mode="node" aria-selected="true">Node selection</button>
+      <button type="button" role="tab" data-mode="link" aria-selected="false">Link selection</button>
+    </div>
+    <button type="button" id="copy-link" class="linkish">Copy link to these sites</button>
+    <span id="copy-status" aria-live="polite"></span>
+  </div>
   <div class="sites">
     <fieldset class="site" data-site="site_a">
       <legend>Site A</legend>
@@ -22,6 +30,7 @@
         <label>Mesh node <input name="node_search" placeholder="Type a node name&hellip;" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"></label>
         <ul class="node-list" role="listbox" hidden></ul>
       </div>
+      <div class="node-note" aria-live="polite"></div>
       <label>Name <input name="name" value="Parrett" required maxlength="100"></label>
       <div class="pos-latlon">
         <label>Latitude <input name="lat" value="45.31005" placeholder="37.000000" autocomplete="off" data-axis="lat"></label>
@@ -50,6 +59,10 @@
         <label>Mesh node <input name="node_search" placeholder="Type a node name&hellip;" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"></label>
         <ul class="node-list" role="listbox" hidden></ul>
       </div>
+      <div class="link-pick" hidden>
+        <label>Link from <span class="link-from">Site A</span> <select name="link" disabled><option value="">Pick Site A first</option></select></label>
+      </div>
+      <div class="node-note" aria-live="polite"></div>
       <label>Name <input name="name" value="K1RKS" required maxlength="100"></label>
       <div class="pos-latlon">
         <label>Latitude <input name="lat" value="45.36683" placeholder="37.050000" autocomplete="off" data-axis="lat"></label>
@@ -179,6 +192,7 @@
 
 <footer>Coordinates are WGS-84. Heights above sea level need no elevation lookup unless the terrain check is on.</footer>
 <script src="assets/leaflet/leaflet.js"></script>
+<script src="sites.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
