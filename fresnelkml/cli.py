@@ -49,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="include the hidden 60%% zone (default on)")
     p.add_argument("--k", type=float, default=4.0 / 3.0, help="effective earth radius factor (default 4/3)")
     p.add_argument("--clutter", type=float, default=0.0, help="clutter height added to terrain")
+    p.add_argument("--trees", action=argparse.BooleanOptionalAction, default=False,
+                   help="also check clearance over trees along the path (default off)")
+    p.add_argument("--tree-height", type=float, default=None,
+                   help="tree height (default 100 ft / 30.5 m, in --units)")
+    p.add_argument("--tree-clearance", type=float, default=None,
+                   help="ignore trees this close to either site (default 50 ft / 15.2 m, in --units)")
     p.add_argument("--config", help="server-style config file with the elevation chain")
     p.add_argument("--elev-provider", choices=PROVIDER_CHOICES, action=_ChainAction, dest="provider",
                    help="add a provider to a one-off elevation chain (repeatable, in order)")
@@ -131,6 +137,13 @@ def summary(report: LinkReport) -> str:
             c += f" ({fmt_gap(report.min_clearance_m, u)}) at {fmt_distance(report.min_clearance_d_m, u, 2)}"
         lines.append(f"  Terrain check: {report.status}, min clearance {c}")
         lines.append(f"    k={opt.k:.4g}, clutter {fmt_height(opt.clutter_m, u)}")
+        if report.trees_checked:
+            t = "n/a" if report.min_tree_clearance is None else (
+                f"{report.min_tree_clearance:.2f} x r1 ({fmt_gap(report.min_tree_clearance_m, u, 'tree tops')}) "
+                f"at {fmt_distance(report.min_tree_clearance_d_m, u, 2)}")
+            lines.append(f"  Tree check ({fmt_height(opt.tree_height_m, u)} trees, ignored within "
+                         f"{fmt_distance(opt.tree_clearance_m, u)} of each site): {report.tree_status}, "
+                         f"min clearance over trees {t}")
         if report.obstructions:
             h = 1 / FEET if u == "ft" else 1.0
             dist_unit, dist_scale = ("mi", 1 / MILE) if u == "ft" else ("km", 1 / 1000)
@@ -170,7 +183,13 @@ def main(argv=None, env=None) -> int:
                       clutter_m=args.clutter * (FEET if args.units == "ft" else 1.0),
                       elev_source=args.elev_source, stations=args.stations, ring_points=args.ring_points,
                       style=args.style, ring_every=args.ring_every, terrain_check=args.terrain_check,
-                      mode=args.mode, color=args.color, coord_display=args.coord_display, units=args.units)
+                      mode=args.mode, color=args.color, coord_display=args.coord_display, units=args.units,
+                      trees=args.trees)
+        scale = FEET if args.units == "ft" else 1.0
+        if args.tree_height is not None:
+            opt.tree_height_m = args.tree_height * scale
+        if args.tree_clearance is not None:
+            opt.tree_clearance_m = args.tree_clearance * scale
         run_env = dict(env)
         if args.google_key:
             run_env["GOOGLE_ELEVATION_KEY"] = args.google_key

@@ -99,6 +99,12 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg.r60 { background: #e8590c; }
 .lg.mast { background: #1d232b; width: 4px; height: 14px; }
 .lg-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blocked); margin-right: 4px; }
+.lg-dot.tree { background: none; border: 2px solid #b02a37; width: 6px; height: 6px; }
+.lg-trees { display: inline-block; width: 18px; height: 10px; background: rgba(34, 139, 34, 0.2); border-top: 1px solid rgba(34, 139, 34, 0.6); margin-right: 4px; vertical-align: middle; }
+.profile-plot .trees { fill: rgba(34, 139, 34, 0.2); stroke: rgba(34, 139, 34, 0.6); stroke-width: 1; }
+.profile-plot .tree-obstruction { fill: none; stroke: #b02a37; stroke-width: 2; }
+.trees-row { margin-top: 4px; }
+.trees-row input:disabled { opacity: 0.5; }
 
 .api-doc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px 16px 12px; margin-bottom: 24px; }
 .api-doc pre { background: #f0f2f5; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 0.82rem; }

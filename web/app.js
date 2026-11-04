@@ -187,6 +187,9 @@ function buildRequest() {
     units: $("#units").value,
     color: $("#color_random").checked ? "random" : $("#color").value,
     coord_display: $("#coord_display").value,
+    trees: $("#trees").checked,
+    tree_height_m: num("tree_height"),
+    tree_clearance_m: num("tree_clearance"),
   };
   Object.keys(options).forEach((k) => options[k] === undefined && delete options[k]);
   return { site_a: readSite("site_a"), site_b: readSite("site_b"), options, format: "json" };
@@ -230,8 +233,8 @@ function dfmt(metres, digits = 3) {
   return Math.abs(metres) < 1000 ? `${metres.toFixed(0)} m` : `${(metres / 1000).toFixed(digits)} km`;
 }
 
-function gapText(metres) {
-  return `terrain ${hfmt(Math.abs(metres))} ${metres >= 0 ? "below" : "above"} the line of sight`;
+function gapText(metres, what = "terrain") {
+  return `${what} ${hfmt(Math.abs(metres))} ${metres >= 0 ? "below" : "above"} the line of sight`;
 }
 
 function updateUnitLabels() {
@@ -269,6 +272,13 @@ function showResult(data, units) {
     const c = r.min_clearance === null ? "n/a"
       : `${r.min_clearance.toFixed(2)} \u00d7 r1 (${gapText(r.min_clearance_m)}) at ${dfmt(r.min_clearance_d_m, 2)}`;
     rows.push(["Min clearance", c]);
+    const t = r.trees;
+    if (t && t.enabled) {
+      const tc = t.min_clearance === null ? "n/a"
+        : `${t.min_clearance.toFixed(2)} \u00d7 r1 (${gapText(t.min_clearance_m, "tree tops")}) at ${dfmt(t.min_clearance_d_m, 2)}`;
+      rows.push(["Min clearance over trees",
+        `<span class="badge ${t.status}">${t.status}</span> ${tc}<br><small>${hfmt(t.height_m)} trees, ignored within ${dfmt(t.clearance_m)} of each site</small>`]);
+    }
   }
   rows.push(["Elevation source", esc(r.elevation_sources.join(", ") || "none")]);
   $("#summary-table").innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
@@ -309,6 +319,18 @@ function drawProfile(r) {
   }
 }
 
+// Consecutive samples that have trees on them.
+function treeRuns(p) {
+  const runs = [];
+  let run = [];
+  for (const q of p) {
+    if (q.tree_top_m !== null && q.tree_top_m !== undefined) run.push(q);
+    else if (run.length) { runs.push(run); run = []; }
+  }
+  if (run.length) runs.push(run);
+  return runs.filter((r) => r.length > 1);
+}
+
 // One terrain-profile chart. Every chart has the same pixel size; each picks its own X and Y scale.
 // opts.from is "a" (label distances from site A) or "b" (label distances to site B).
 function drawPlot(svg, p, opts) {
@@ -319,6 +341,7 @@ function drawPlot(svg, p, opts) {
   const eps = span * 1e-6;
   const visible = opts.masts.filter((m) => m.d >= d0 - eps && m.d <= d1 + eps);
   const ys = p.flatMap((q) => [q.effective_m, q.los_m, q.zone_bottom_m])
+    .concat(p.filter((q) => q.tree_top_m !== null && q.tree_top_m !== undefined).map((q) => q.tree_top_m))
     .concat(visible.flatMap((m) => [m.ground, m.top]));
   let yMin = Math.min(...ys), yMax = Math.max(...ys);
   const pad = Math.max(3, (yMax - yMin) * 0.08);
@@ -339,11 +362,19 @@ function drawPlot(svg, p, opts) {
     const label = dfmt(opts.from === "b" ? Math.max(0, D - d) : d, 2);
     parts.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${label}</text>`);
   }
-  parts.push(`<path class="ground" d="${ground}"/>`,
-    `<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>`,
+  parts.push(`<path class="ground" d="${ground}"/>`);
+  for (const run of treeRuns(p)) {
+    const top = run.map((q) => `${x(q.d_m).toFixed(1)},${y(q.tree_top_m).toFixed(1)}`);
+    const bottom = run.slice().reverse().map((q) => `${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`);
+    parts.push(`<path class="trees" d="M${top.join("L")}L${bottom.join("L")}Z"/>`);
+  }
+  parts.push(`<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>`,
     `<path class="los" d="${line("los_m")}"/>`);
   for (const q of p.filter((q) => q.clearance !== null && q.clearance < 0.6)) {
     parts.push(`<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(opts.masts[0].name)}</title></circle>`);
+  }
+  for (const q of p.filter((q) => q.tree_clearance !== null && q.tree_clearance !== undefined && q.tree_clearance < 0.6)) {
+    parts.push(`<circle class="tree-obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.tree_top_m).toFixed(1)}" r="3.5"><title>clearance over trees ${q.tree_clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(opts.masts[0].name)}</title></circle>`);
   }
   for (const m of opts.masts) {
     if (visible.includes(m)) {
@@ -432,6 +463,9 @@ function init() {
   $("#color_random").addEventListener("change", (e) => { $("#color").disabled = e.target.checked; });
   $("#terrain_check").addEventListener("change", updateLookupHint);
   $("#units").addEventListener("change", updateUnitLabels);
+  $("#trees").addEventListener("change", (e) => {
+    $("#tree_height").disabled = $("#tree_clearance").disabled = !e.target.checked;
+  });
   updateUnitLabels();
   $("#link-form").addEventListener("submit", submit);
   $("#download").addEventListener("click", download);

@@ -19,6 +19,7 @@ LOS_COLOR = "ff00ffff"
 TOWER_COLOR = "ff0000ff"
 OBSTRUCTION_COLOR = "ff0000ff"
 PROFILE_COLOR = "ff3c8cd2"
+TREE_OBSTRUCTION_COLOR = "ff228b22"
 
 
 def _sub(parent: ET.Element, tag: str, text=None, **attrib) -> ET.Element:
@@ -100,6 +101,19 @@ def _link_description(report: LinkReport) -> str:
         f"Max r1: {fmt_height(report.r1_max_m, u, 2)}, 0.6\u00b7r1: {fmt_height(report.r60_max_m, u, 2)}",
         f"Min clearance: {clearance}",
         f"Status: {status}",
+    ]
+    if report.trees_checked:
+        trees = "n/a"
+        if report.min_tree_clearance is not None:
+            trees = (f"{report.min_tree_clearance:.2f} \u00d7 r1 ({fmt_gap(report.min_tree_clearance_m, u, 'tree tops')})"
+                     f" at {fmt_distance(report.min_tree_clearance_d_m, u, 2)}")
+        lines += [
+            f"Trees: {fmt_height(opt.tree_height_m, u)} tall, ignored within {fmt_distance(opt.tree_clearance_m, u)} "
+            "of each site",
+            f"Min clearance over trees: {trees}",
+            f"Tree status: {report.tree_status}",
+        ]
+    lines += [
         f"k = {opt.k:.4g}, clutter {fmt_height(opt.clutter_m, u)}",
         "Elevation source: " + html.escape(", ".join(report.elevation_sources) or "none (heights given ASL)"),
         f"Zone color: {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",
@@ -165,6 +179,7 @@ def render_kml(report: LinkReport) -> str:
     _style(doc, "tower", line=TOWER_COLOR, width=4)
     _style(doc, "obstruction", icon=OBSTRUCTION_COLOR)
     _style(doc, "profile", line=PROFILE_COLOR, width=2)
+    _style(doc, "tree_obstruction", icon=TREE_OBSTRUCTION_COLOR)
 
     sites = _sub(doc, "Folder")
     _sub(sites, "name", "Sites")
@@ -237,6 +252,21 @@ def render_kml(report: LinkReport) -> str:
             pt = _sub(pm, "Point")
             _sub(pt, "altitudeMode", "absolute")
             _sub(pt, "coordinates", _coord(p.lon, p.lat, p.effective_m))
+
+    if report.trees_checked:
+        tf = _sub(doc, "Folder")
+        _sub(tf, "name", f"Tree check ({report.tree_status})")
+        u = opt.units
+        for p in report.tree_obstructions:
+            pm = _sub(tf, "Placemark")
+            _sub(pm, "name", f"trees c={p.tree_clearance:.2f} @ {fmt_distance(p.d_m, u, 2)}")
+            _sub(pm, "description", f"Tree tops {fmt_height(p.tree_top_m, u)} "
+                                    f"({fmt_height(opt.tree_height_m, u)} trees on {fmt_height(p.effective_m, u)}), "
+                                    f"LOS {fmt_height(p.los_m, u)}, r1 {fmt_height(p.r1_m, u, 2)}")
+            _sub(pm, "styleUrl", "#tree_obstruction")
+            pt = _sub(pm, "Point")
+            _sub(pt, "altitudeMode", "absolute")
+            _sub(pt, "coordinates", _coord(p.lon, p.lat, p.tree_top_m))
 
     ET.indent(root, space=" ")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode") + "\n"

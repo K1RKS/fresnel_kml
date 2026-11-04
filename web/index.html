@@ -84,6 +84,11 @@
         <input id="color" type="color" value="#00ff00" disabled aria-label="Zone color">
       </div>
     </div>
+    <div class="row trees-row">
+      <label class="inline"><input id="trees" type="checkbox"> Trees along the path</label>
+      <label><span>Tree height (<span class="unit">m</span>)</span> <input id="tree_height" type="number" step="any" value="100" min="0" disabled></label>
+      <label><span>Tree clearance from each site (<span class="unit">m</span>)</span> <input id="tree_clearance" type="number" step="any" value="50" min="0" disabled></label>
+    </div>
     <p id="lookup-hint" class="hint"></p>
 
     <details>
@@ -139,7 +144,7 @@
     <svg id="profile-a" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site A"></svg>
     <h4 id="profile-title-b" class="plot-title"></h4>
     <svg id="profile-b" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site B"></svg>
-    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60%</p>
+    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees <span class="lg-dot tree"></span>clearance over trees below 60%</p>
   </div>
 </section>
 

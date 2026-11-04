@@ -58,6 +58,9 @@ class Options:
     color: str = "random"
     coord_display: str = "decimal"
     units: str = "m"  # display units for heights and distances; inputs are converted to metres before this
+    trees: bool = False
+    tree_height_m: float = 100 * 0.3048
+    tree_clearance_m: float = 50 * 0.3048  # trees are ignored this far from each site
 
 
 @dataclass
@@ -96,6 +99,8 @@ class ProfilePoint:
     los_m: float
     r1_m: float
     clearance: float | None
+    tree_top_m: float | None = None
+    tree_clearance: float | None = None
 
 
 @dataclass
@@ -122,6 +127,11 @@ class LinkReport:
     min_clearance_d_m: float | None = None
     min_clearance_m: float | None = None  # line of sight minus effective terrain at the worst point
     status: str | None = None
+    trees_checked: bool = False
+    min_tree_clearance: float | None = None
+    min_tree_clearance_d_m: float | None = None
+    min_tree_clearance_m: float | None = None  # line of sight minus tree tops at the worst point
+    tree_status: str | None = None
     elevation_sources: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -134,6 +144,10 @@ class LinkReport:
     @property
     def obstructions(self) -> list[ProfilePoint]:
         return [p for p in self.all_samples if p.clearance is not None and p.clearance < CLEAR_RATIO]
+
+    @property
+    def tree_obstructions(self) -> list[ProfilePoint]:
+        return [p for p in self.all_samples if p.tree_clearance is not None and p.tree_clearance < CLEAR_RATIO]
 
     def to_dict(self) -> dict:
         def site(s: SiteResult) -> dict:
@@ -163,6 +177,15 @@ class LinkReport:
             "min_clearance_d_m": _r(self.min_clearance_d_m),
             "min_clearance_m": _r(self.min_clearance_m),
             "units": self.options.units,
+            "trees": {
+                "enabled": self.trees_checked,
+                "height_m": _r(self.options.tree_height_m),
+                "clearance_m": _r(self.options.tree_clearance_m),
+                "min_clearance": None if self.min_tree_clearance is None else round(self.min_tree_clearance, 3),
+                "min_clearance_d_m": _r(self.min_tree_clearance_d_m),
+                "min_clearance_m": _r(self.min_tree_clearance_m),
+                "status": self.tree_status,
+            },
             "status": self.status,
             "zone_color": self.zone_color.to_dict(),
             "elevation_sources": self.elevation_sources,
@@ -185,7 +208,17 @@ def _point_dict(p: ProfilePoint) -> dict:
         "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
         "r60_bottom_m": _r(p.los_m - CLEAR_RATIO * p.r1_m),
         "clearance": None if p.clearance is None else round(p.clearance, 3),
+        "tree_top_m": _r(p.tree_top_m),
+        "tree_clearance": None if p.tree_clearance is None else round(p.tree_clearance, 3),
     }
+
+
+def clearance_status(ratio: float | None) -> str:
+    if ratio is None:
+        return "UNKNOWN"
+    if ratio >= CLEAR_RATIO:
+        return "CLEAR"
+    return "MARGINAL" if ratio >= 0 else "BLOCKED"
 
 
 def end_window_points(site_a: Site, site_b: Site, distance: float, bearing_ab: float, bearing_ba: float,
@@ -224,6 +257,11 @@ def validate_options(opt: Options) -> None:
         ("mode", opt.mode in ("absolute", "relative"), "must be 'absolute' or 'relative'"),
         ("coord_display", opt.coord_display in DISPLAY_FORMATS, f"must be one of {', '.join(DISPLAY_FORMATS)}"),
         ("units", opt.units in ("m", "ft"), "must be 'm' or 'ft'"),
+        ("trees", isinstance(opt.trees, bool), "must be true or false"),
+        ("tree_height_m", _finite(opt.tree_height_m) and 0 <= opt.tree_height_m <= 150,
+         "must be between 0 and 150 m (about 490 ft)"),
+        ("tree_clearance_m", _finite(opt.tree_clearance_m) and 0 <= opt.tree_clearance_m <= 50_000,
+         "must be between 0 and 50 km"),
         ("terrain_check", opt.terrain_check in (None, True, False), "must be true, false or null"),
         ("sixty", isinstance(opt.sixty, bool), "must be true or false"),
         ("elev_source", isinstance(opt.elev_source, str) and opt.elev_source != "", "must be a source name"),
@@ -404,15 +442,27 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         report.min_clearance = min_c
         report.min_clearance_d_m = min_d
         report.min_clearance_m = min_gap
+        report.status = clearance_status(min_c)
         if min_c is None:
-            report.status = "UNKNOWN"
             warnings.append("Link too short for a meaningful Fresnel clearance check.")
-        elif min_c >= CLEAR_RATIO:
-            report.status = "CLEAR"
-        elif min_c >= 0:
-            report.status = "MARGINAL"
-        else:
-            report.status = "BLOCKED"
+
+        if opt.trees:
+            report.trees_checked = True
+            start, stop = opt.tree_clearance_m, distance - opt.tree_clearance_m
+            for p in report.profile + report.profile_a + report.profile_b:
+                if start <= p.d_m <= stop:
+                    p.tree_top_m = p.effective_m + opt.tree_height_m
+                    if p.r1_m >= MIN_R1_FOR_CLEARANCE:
+                        p.tree_clearance = (p.los_m - p.tree_top_m) / p.r1_m
+            worst = min((p for p in report.all_samples if p.tree_clearance is not None),
+                        key=lambda p: p.tree_clearance, default=None)
+            if worst is not None:
+                report.min_tree_clearance = worst.tree_clearance
+                report.min_tree_clearance_d_m = worst.d_m
+                report.min_tree_clearance_m = worst.los_m - worst.tree_top_m
+            else:
+                warnings.append("No part of the path is far enough from both sites for the tree check.")
+            report.tree_status = clearance_status(report.min_tree_clearance)
 
     sources = [r.ground_source for r in (ra, rb) if r.ground_source]
     sources += [r.source for r in looked_up]

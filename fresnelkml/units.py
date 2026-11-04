@@ -18,10 +18,10 @@ def fmt_height(metres: float | None, units: str = "m", digits: int = 1) -> str:
     return f"{metres:.{digits}f} m"
 
 
-def fmt_gap(metres: float, units: str = "m") -> str:
-    """Describe line of sight minus terrain height."""
+def fmt_gap(metres: float, units: str = "m", what: str = "terrain") -> str:
+    """Describe line of sight minus the height of `what` (terrain or tree tops)."""
     where = "below" if metres >= 0 else "above"
-    return f"terrain {fmt_height(abs(metres), units)} {where} the line of sight"
+    return f"{what} {fmt_height(abs(metres), units)} {where} the line of sight"
 
 
 def fmt_distance(metres: float, units: str = "m", digits: int = 3) -> str:

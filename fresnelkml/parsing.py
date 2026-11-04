@@ -132,12 +132,14 @@ def parse_options_dict(data) -> tuple[Options, str, list[str]]:
         warnings.append("options.google_key is ignored; the server's own key is used.")
     units = _units(data.get("units", "m"))
     opt = Options()
-    numbers = ("freq_ghz", "k", "clutter_m")
+    numbers = ("freq_ghz", "k", "clutter_m", "tree_height_m", "tree_clearance_m")
+    lengths = ("clutter_m", "tree_height_m", "tree_clearance_m")  # given in feet when units is "ft"
     integers = ("zone", "stations", "ring_points", "ring_every")
     strings = ("elev_source", "style", "mode", "color", "coord_display")
     for key in numbers:
         if data.get(key) is not None:
-            setattr(opt, key, _number(data[key], f"options.{key}"))
+            value = _number(data[key], f"options.{key}")
+            setattr(opt, key, value * FEET if units == "ft" and key in lengths else value)
     for key in integers:
         if data.get(key) is not None:
             setattr(opt, key, _integer(data[key], f"options.{key}"))
@@ -148,12 +150,12 @@ def parse_options_dict(data) -> tuple[Options, str, list[str]]:
             setattr(opt, key, data[key].strip().lower() if key != "elev_source" else data[key].strip())
     if data.get("sixty") is not None:
         opt.sixty = _boolean(data["sixty"], "options.sixty")
+    if data.get("trees") is not None:
+        opt.trees = _boolean(data["trees"], "options.trees")
     if "terrain_check" in data:
         tc = data["terrain_check"]
         opt.terrain_check = None if tc is None or tc == "auto" else _boolean(tc, "options.terrain_check")
     opt.units = units
-    if units == "ft":
-        opt.clutter_m *= FEET
     return opt, units, warnings
 
 
