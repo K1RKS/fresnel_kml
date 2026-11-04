@@ -17,10 +17,10 @@
   <div class="sites">
     <fieldset class="site" data-site="site_a">
       <legend>Site A</legend>
-      <label>Name <input name="name" value="TowerA" required maxlength="100"></label>
+      <label>Name <input name="name" value="Parrett" required maxlength="100"></label>
       <div class="pos-latlon">
-        <label>Latitude <input name="lat" value="37.000000" placeholder="37.000000" autocomplete="off" data-axis="lat"></label>
-        <label>Longitude <input name="lon" value="-122.000000" placeholder="-122.000000" autocomplete="off" data-axis="lon"></label>
+        <label>Latitude <input name="lat" value="45.31005" placeholder="37.000000" autocomplete="off" data-axis="lat"></label>
+        <label>Longitude <input name="lon" value="-122.88422" placeholder="-122.000000" autocomplete="off" data-axis="lon"></label>
       </div>
       <div class="pos-single" hidden>
         <label>Position <input name="position" placeholder="10S 581526 4099055, CM87xa08, 849V2WM8+MM&hellip;" autocomplete="off" data-axis=""></label>
@@ -28,7 +28,7 @@
       <button type="button" class="linkish toggle-pos">Paste a whole position instead (UTM, MGRS, grid locator, Plus code&hellip;)</button>
       <div class="decoded" aria-live="polite"></div>
       <div class="height-row">
-        <label><span>Antenna height (<span class="unit">m</span>)</span> <input name="height" type="number" step="any" value="30" required></label>
+        <label><span>Antenna height (<span class="unit">m</span>)</span> <input name="height" type="number" step="any" value="12" required></label>
         <label>Height is
           <select name="height_ref">
             <option value="agl" selected>above ground</option>
@@ -41,10 +41,10 @@
 
     <fieldset class="site" data-site="site_b">
       <legend>Site B</legend>
-      <label>Name <input name="name" value="TowerB" required maxlength="100"></label>
+      <label>Name <input name="name" value="K1RKS" required maxlength="100"></label>
       <div class="pos-latlon">
-        <label>Latitude <input name="lat" value="37.050000" placeholder="37.050000" autocomplete="off" data-axis="lat"></label>
-        <label>Longitude <input name="lon" value="-121.900000" placeholder="-121.900000" autocomplete="off" data-axis="lon"></label>
+        <label>Latitude <input name="lat" value="45.36683" placeholder="37.050000" autocomplete="off" data-axis="lat"></label>
+        <label>Longitude <input name="lon" value="-122.76617" placeholder="-121.900000" autocomplete="off" data-axis="lon"></label>
       </div>
       <div class="pos-single" hidden>
         <label>Position <input name="position" placeholder="10S 597811 4100985, CM97bb11&hellip;" autocomplete="off" data-axis=""></label>
@@ -69,7 +69,7 @@
     <div class="row">
       <label>Frequency (GHz) <input id="freq_ghz" type="number" step="any" value="5.8" min="0.03" max="100"></label>
       <label>Height units
-        <select id="units"><option value="m" selected>metres</option><option value="ft">feet</option></select>
+        <select id="units"><option value="m">metres</option><option value="ft" selected>feet</option></select>
       </label>
       <label>Terrain check
         <select id="terrain_check">
