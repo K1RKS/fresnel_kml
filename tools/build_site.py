@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import stat
@@ -16,6 +17,19 @@ sys.path.insert(0, ROOT)
 from fresnelkml import __version__  # noqa: E402
 
 
+def stamp_assets(site: str) -> None:
+    """Add a content hash to the script and stylesheet links so browsers fetch new versions."""
+    index = os.path.join(site, "index.html")
+    with open(index, encoding="utf-8") as fh:
+        html = fh.read()
+    for asset in ("app.js", "style.css"):
+        with open(os.path.join(site, asset), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()[:10]
+        html = html.replace(f'"{asset}"', f'"{asset}?v={digest}"')
+    with open(index, "w", encoding="utf-8") as fh:
+        fh.write(html)
+
+
 def build(out_dir: str, name: str = "site", tarball: bool = True) -> str:
     site = os.path.join(out_dir, name)
     if os.path.exists(site):
@@ -26,6 +40,7 @@ def build(out_dir: str, name: str = "site", tarball: bool = True) -> str:
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     with open(os.path.join(site, "VERSION"), "w", encoding="utf-8") as fh:
         fh.write(__version__ + "\n")
+    stamp_assets(site)
     cgi = os.path.join(site, "api", "fresnel.cgi")
     os.chmod(cgi, os.stat(cgi).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     if tarball:

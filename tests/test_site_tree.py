@@ -48,6 +48,9 @@ def test_tree_layout(built):
         assert os.path.isfile(os.path.join(site, rel)), rel
     assert os.stat(os.path.join(site, "api", "fresnel.cgi")).st_mode & stat.S_IXOTH
     assert not any("__pycache__" in root for root, _, _ in os.walk(site))
+    with open(os.path.join(site, "index.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    assert 'src="app.js?v=' in html and 'href="style.css?v=' in html
     with tarfile.open(tar) as tf:
         names = tf.getnames()
     assert "site/api/fresnel.cgi" in names and "site/lib/fresnelkml/kml.py" in names

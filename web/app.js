@@ -38,9 +38,16 @@ function setupSite(fs) {
       if (!axis || !(await splitPosition(fs, input))) decodeField(fs, input);
     };
     input.addEventListener("change", handle);
-    input.addEventListener("input", (ev) => {
+    input.addEventListener("input", () => input.classList.remove("invalid"));
+    // A coordinate box holds one value, so a paste replaces it instead of
+    // being inserted into the prefilled text.
+    input.addEventListener("paste", (ev) => {
+      const text = (ev.clipboardData && ev.clipboardData.getData("text")) || "";
+      if (!text.trim()) return;
+      ev.preventDefault();
+      input.value = text.trim();
       input.classList.remove("invalid");
-      if (axis && ev.inputType === "insertFromPaste") handle();
+      handle();
     });
   });
   $("input[name=ground]", fs).addEventListener("input", updateLookupHint);
