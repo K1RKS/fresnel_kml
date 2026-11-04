@@ -28,7 +28,7 @@
       <button type="button" class="linkish toggle-pos">Paste a whole position instead (UTM, MGRS, grid locator, Plus code&hellip;)</button>
       <div class="decoded" aria-live="polite"></div>
       <div class="height-row">
-        <label>Antenna height (<span class="unit">m</span>) <input name="height" type="number" step="any" value="30" required></label>
+        <label><span>Antenna height (<span class="unit">m</span>)</span> <input name="height" type="number" step="any" value="30" required></label>
         <label>Height is
           <select name="height_ref">
             <option value="agl" selected>above ground</option>
@@ -36,7 +36,7 @@
           </select>
         </label>
       </div>
-      <label class="ground-row">Ground elevation (<span class="unit">m</span>, optional override) <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
+      <label class="ground-row"><span>Ground elevation (<span class="unit">m</span>, optional override)</span> <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
     </fieldset>
 
     <fieldset class="site" data-site="site_b">
@@ -52,7 +52,7 @@
       <button type="button" class="linkish toggle-pos">Paste a whole position instead (UTM, MGRS, grid locator, Plus code&hellip;)</button>
       <div class="decoded" aria-live="polite"></div>
       <div class="height-row">
-        <label>Antenna height (<span class="unit">m</span>) <input name="height" type="number" step="any" value="25" required></label>
+        <label><span>Antenna height (<span class="unit">m</span>)</span> <input name="height" type="number" step="any" value="25" required></label>
         <label>Height is
           <select name="height_ref">
             <option value="agl" selected>above ground</option>
@@ -60,7 +60,7 @@
           </select>
         </label>
       </div>
-      <label class="ground-row">Ground elevation (<span class="unit">m</span>, optional override) <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
+      <label class="ground-row"><span>Ground elevation (<span class="unit">m</span>, optional override)</span> <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
     </fieldset>
   </div>
 
@@ -92,7 +92,7 @@
         <label>Fresnel zone <input id="zone" type="number" min="1" max="10" value="1"></label>
         <label class="inline"><input id="sixty" type="checkbox" checked> Include 60% zone (hidden by default)</label>
         <label>k factor <input id="k" type="number" step="any" value="1.3333" min="0.1"></label>
-        <label>Clutter height (<span class="unit">m</span>) <input id="clutter" type="number" step="any" value="0" min="0"></label>
+        <label><span>Clutter height (<span class="unit">m</span>)</span> <input id="clutter" type="number" step="any" value="0" min="0"></label>
       </div>
       <div class="row">
         <label>Elevation source <select id="elev_source"><option value="auto">auto (server chain)</option></select></label>
