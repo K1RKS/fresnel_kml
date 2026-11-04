@@ -30,6 +30,7 @@ The spec calls the CLI `fresnel_kml.py`. A package can't have that same name: ru
 - `fresnelkml/fresnel.py`: wavelength, zone radius, maximum radius, earth bulge
 - `fresnelkml/geo.py`: distance, bearing, path stations, conversion from local offsets to lat/lon, longitude normalisation. Uses `pyproj.Geod` when installed and haversine otherwise.
 - `fresnelkml/elevation.py`: the `ElevationProvider` interface, the HTTP providers and the per-point fallback chain
+- `fresnelkml/httpjson.py`: JSON-over-HTTP helper that uses `requests` when installed and `urllib` otherwise
 - `fresnelkml/local_hgt.py`: offline SRTM tile reader
 - `fresnelkml/config.py`: loads the server config and builds the elevation chain
 - `fresnelkml/analysis.py`: `Site`, `Options`, `LinkReport` (with `to_dict()` for JSON), `analyze()`
@@ -176,9 +177,9 @@ Parsing rules:
 - Whitespace, the degree/minute/second symbols (`°`, `º`, `'`, `′`, `’`, `"`, `″`, `”`) and the letters `d`, `m`, `s` are interchangeable separators. Case doesn't matter.
 - Space-separated numbers are read by count: one number is decimal degrees, two are DDM, three are DMS.
 - A number with no sign and no hemisphere letter is north or east. A negative sign together with a hemisphere letter is a `400` error, because the two disagree.
-- Minutes and seconds must be below 60; latitude must be within ±90 and longitude within ±180. Out-of-range values are errors, never silently wrapped. On output, the longitude 180 is written as −180.
+- Minutes and seconds must be below 60; latitude must be within ±90 and longitude within ±180. Out-of-range values are errors, never silently wrapped. Longitudes are normalised to (−180, 180], so −180 is written as 180.
 - Pairs are always latitude first (as in Google Maps, ISO 6709 and geo URIs). If the first value is out of latitude range but the second isn't, the error says the order looks swapped. The tool never swaps them automatically.
-- A comma used as a decimal mark (`37,5`) is not accepted, because a comma separates the two values of a pair. The error suggests using `.`.
+- A comma used as a decimal mark is not accepted. In a single latitude or longitude field, `37,5` is an error that suggests using `.`. In a position field a comma always separates latitude from longitude, so `37,5, -122,3` (three commas) is an error with the same suggestion.
 - The letter after a UTM zone number is ambiguous for `N` and `S`: they are latitude bands (0–8°N and 32–40°N) and also the common hemisphere shorthand. The letter is first read as a band. If the resulting latitude isn't inside that band and the letter is `N` or `S`, it is read as a hemisphere instead. If neither reading fits, it's a `400` error. This handles `10S 581526 4099055` (band S, California) and `10N 581526 4099055` (northern hemisphere) correctly. The words `north` and `south` are also accepted.
 - Zone-based formats are converted with pure-Python WGS-84 formulas: UTM uses Krüger series (accurate to well under a millimetre), and MGRS uses the standard 100 km square lettering on top of UTM.
 - Area-based formats (Maidenhead and Plus codes) decode to the centre of their cell. A note gives the cell size, and a warning is added when the cell is larger than 100 m (for example, a 6-character Maidenhead locator is about 4.6 km × 2.3 km, which is too coarse for tower placement).

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fresnel Zone KML Generator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Fresnel Zone KML Generator</h1>
+  <p>Enter two radio sites to get a Google Earth Pro KML of the line of sight and the Fresnel zone, with an optional terrain clearance check.</p>
+</header>
+
+<main>
+<form id="link-form" novalidate>
+  <div class="sites">
+    <fieldset class="site" data-site="site_a">
+      <legend>Site A</legend>
+      <label>Name <input name="name" value="TowerA" required maxlength="100"></label>
+      <div class="pos-latlon">
+        <label>Latitude <input name="lat" value="37.000000" placeholder="37.000000" autocomplete="off" data-axis="lat"></label>
+        <label>Longitude <input name="lon" value="-122.000000" placeholder="-122.000000" autocomplete="off" data-axis="lon"></label>
+      </div>
+      <div class="pos-single" hidden>
+        <label>Position <input name="position" placeholder="10S 581526 4099055, CM87xa08, 849V2WM8+MM&hellip;" autocomplete="off" data-axis=""></label>
+      </div>
+      <button type="button" class="linkish toggle-pos">Paste a whole position instead (UTM, MGRS, grid locator, Plus code&hellip;)</button>
+      <div class="decoded" aria-live="polite"></div>
+      <div class="height-row">
+        <label>Antenna height <input name="height" type="number" step="any" value="30" required></label>
+        <label>Height is
+          <select name="height_ref">
+            <option value="agl" selected>above ground</option>
+            <option value="asl">above sea level</option>
+          </select>
+        </label>
+      </div>
+      <label class="ground-row">Ground elevation (optional override) <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
+    </fieldset>
+
+    <fieldset class="site" data-site="site_b">
+      <legend>Site B</legend>
+      <label>Name <input name="name" value="TowerB" required maxlength="100"></label>
+      <div class="pos-latlon">
+        <label>Latitude <input name="lat" value="37.050000" placeholder="37.050000" autocomplete="off" data-axis="lat"></label>
+        <label>Longitude <input name="lon" value="-121.900000" placeholder="-121.900000" autocomplete="off" data-axis="lon"></label>
+      </div>
+      <div class="pos-single" hidden>
+        <label>Position <input name="position" placeholder="10S 597811 4100985, CM97bb11&hellip;" autocomplete="off" data-axis=""></label>
+      </div>
+      <button type="button" class="linkish toggle-pos">Paste a whole position instead (UTM, MGRS, grid locator, Plus code&hellip;)</button>
+      <div class="decoded" aria-live="polite"></div>
+      <div class="height-row">
+        <label>Antenna height <input name="height" type="number" step="any" value="25" required></label>
+        <label>Height is
+          <select name="height_ref">
+            <option value="agl" selected>above ground</option>
+            <option value="asl">above sea level</option>
+          </select>
+        </label>
+      </div>
+      <label class="ground-row">Ground elevation (optional override) <input name="ground" type="number" step="any" placeholder="look up automatically"></label>
+    </fieldset>
+  </div>
+
+  <fieldset class="link-options">
+    <legend>Link</legend>
+    <div class="row">
+      <label>Frequency (GHz) <input id="freq_ghz" type="number" step="any" value="5.8" min="0.03" max="100"></label>
+      <label>Units
+        <select id="units"><option value="m" selected>metres</option><option value="ft">feet</option></select>
+      </label>
+      <label>Terrain check
+        <select id="terrain_check">
+          <option value="auto" selected>auto (when a lookup is needed)</option>
+          <option value="on">on</option>
+          <option value="off">off</option>
+        </select>
+      </label>
+      <div class="color-pick">
+        <span>Zone color</span>
+        <label class="inline"><input id="color_random" type="checkbox" checked> Random</label>
+        <input id="color" type="color" value="#00ff00" disabled aria-label="Zone color">
+      </div>
+    </div>
+    <p id="lookup-hint" class="hint"></p>
+
+    <details>
+      <summary>Advanced</summary>
+      <div class="row">
+        <label>Fresnel zone <input id="zone" type="number" min="1" max="10" value="1"></label>
+        <label class="inline"><input id="sixty" type="checkbox" checked> Include 60% zone (hidden by default)</label>
+        <label>k factor <input id="k" type="number" step="any" value="1.3333" min="0.1"></label>
+        <label>Clutter height <input id="clutter" type="number" step="any" value="0" min="0"></label>
+      </div>
+      <div class="row">
+        <label>Elevation source <select id="elev_source"><option value="auto">auto (server chain)</option></select></label>
+        <label>Stations <input id="stations" type="number" min="2" max="512" value="64"></label>
+        <label>Ring points <input id="ring_points" type="number" min="6" max="72" value="24"></label>
+        <label>Style
+          <select id="style"><option value="mesh" selected>mesh (solid)</option><option value="rings">rings (wireframe)</option></select>
+        </label>
+        <label>Ring every <input id="ring_every" type="number" min="1" value="4"></label>
+      </div>
+      <div class="row">
+        <label>Tower altitude mode
+          <select id="mode"><option value="absolute" selected>absolute</option><option value="relative">relative to ground</option></select>
+        </label>
+        <label>Show positions as
+          <select id="coord_display"><option value="decimal" selected>decimal degrees</option><option value="dms">deg min sec</option><option value="ddm">deg decimal min</option></select>
+        </label>
+      </div>
+    </details>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit" id="generate">Generate KML</button>
+    <span id="busy" hidden>Working&hellip; terrain lookups can take a few seconds.</span>
+  </div>
+  <div id="error" class="error" role="alert" hidden></div>
+</form>
+
+<section id="result" hidden>
+  <div class="result-head">
+    <h2>Result <span id="status-badge" class="badge"></span></h2>
+    <button type="button" id="download">Download KML</button>
+  </div>
+  <div class="summary">
+    <table id="summary-table"></table>
+    <div class="swatch-box"><span id="swatch"></span><span id="swatch-text"></span></div>
+  </div>
+  <ul id="warnings" class="warnings"></ul>
+  <div id="profile-box">
+    <h3>Terrain profile</h3>
+    <svg id="profile" viewBox="0 0 800 260" role="img" aria-label="Terrain profile"></svg>
+    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line</p>
+  </div>
+</section>
+
+<details class="api-doc">
+  <summary>API</summary>
+  <p><code>POST api/fresnel.cgi</code> with <code>Content-Type: application/json</code>. The response is the KML file, or JSON with <code>"format": "json"</code>.</p>
+<pre>{
+  "site_a": {"name": "TowerA", "lat": 37.0, "lon": -122.0, "agl_m": 30},
+  "site_b": {"name": "TowerB", "position": "10S 597811 4100985", "asl_m": 412.5},
+  "options": {"freq_ghz": 5.8, "color": "random", "terrain_check": true},
+  "format": "kml"
+}</pre>
+<pre id="curl-example">curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/api/fresnel.cgi -o link.kml</pre>
+  <p>Each site takes <code>lat</code>/<code>lon</code> (decimal degrees by default; DMS and DDM strings also work) or one <code>position</code> string, and exactly one of <code>agl_m</code> or <code>asl_m</code>. <code>GET api/fresnel.cgi?sources</code> lists elevation sources; <code>GET api/fresnel.cgi?parse=TEXT</code> decodes a coordinate.</p>
+</details>
+</main>
+
+<footer>Coordinates are WGS-84. Heights above sea level need no elevation lookup unless the terrain check is on.</footer>
+<script src="app.js"></script>
+</body>
+</html>

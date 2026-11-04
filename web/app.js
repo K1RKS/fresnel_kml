@@ -1,0 +1,315 @@
+"use strict";
+
+const API = "api/fresnel.cgi";
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const DECIMAL_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
+
+let lastKml = null;
+let lastFilename = "fresnel.kml";
+
+function siteFieldset(key) {
+  return $(`fieldset[data-site="${key}"]`);
+}
+
+function usesSinglePosition(fs) {
+  return !$(".pos-single", fs).hidden;
+}
+
+function setupSite(fs) {
+  const toggle = $(".toggle-pos", fs);
+  toggle.addEventListener("click", () => {
+    const single = !usesSinglePosition(fs);
+    $(".pos-single", fs).hidden = !single;
+    $(".pos-latlon", fs).hidden = single;
+    toggle.textContent = single
+      ? "Enter latitude and longitude separately instead"
+      : "Paste a whole position instead (UTM, MGRS, grid locator, Plus code\u2026)";
+    $(".decoded", fs).textContent = "";
+  });
+  const ref = $("select[name=height_ref]", fs);
+  ref.addEventListener("change", () => {
+    $(".ground-row", fs).hidden = ref.value === "asl";
+    updateLookupHint();
+  });
+  $$("input[data-axis]", fs).forEach((input) => {
+    input.addEventListener("change", () => decodeField(fs, input));
+    input.addEventListener("input", () => input.classList.remove("invalid"));
+  });
+  $("input[name=ground]", fs).addEventListener("input", updateLookupHint);
+}
+
+async function decodeField(fs, input) {
+  const out = $(".decoded", fs);
+  const text = input.value.trim();
+  if (!text) {
+    out.textContent = "";
+    return;
+  }
+  const axis = input.dataset.axis;
+  if (axis && DECIMAL_RE.test(text)) {
+    out.textContent = "";
+    out.classList.remove("bad");
+    return;
+  }
+  const params = new URLSearchParams({ parse: text });
+  if (axis) params.set("axis", axis);
+  try {
+    const resp = await fetch(`${API}?${params}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      out.textContent = data.error || "Not recognised";
+      out.classList.add("bad");
+      input.classList.add("invalid");
+      return;
+    }
+    out.classList.remove("bad");
+    const value = axis ? `${data[axis].toFixed(7)}` : data.display;
+    const extra = [...(data.notes || []), ...(data.warnings || [])].join(" ");
+    out.textContent = `= ${value} (from ${data.format})${extra ? ". " + extra : ""}`;
+  } catch (err) {
+    out.textContent = "";
+  }
+}
+
+function anyLookupNeeded() {
+  return ["site_a", "site_b"].some((key) => {
+    const fs = siteFieldset(key);
+    return $("select[name=height_ref]", fs).value === "agl" && $("input[name=ground]", fs).value.trim() === "";
+  });
+}
+
+function updateLookupHint() {
+  const tc = $("#terrain_check").value;
+  const lookup = anyLookupNeeded();
+  const terrain = tc === "on" || (tc === "auto" && lookup);
+  let text;
+  if (!lookup && !terrain) text = "No elevation lookup will be made.";
+  else if (terrain) text = "Ground elevations along the path will be looked up for the terrain check.";
+  else text = "Ground elevation will be looked up for the tower site(s) given above ground.";
+  $("#lookup-hint").textContent = text;
+}
+
+function readSite(key) {
+  const fs = siteFieldset(key);
+  const site = { name: $("input[name=name]", fs).value.trim() };
+  if (usesSinglePosition(fs)) {
+    site.position = $("input[name=position]", fs).value.trim();
+  } else {
+    for (const axis of ["lat", "lon"]) {
+      const v = $(`input[name=${axis}]`, fs).value.trim();
+      site[axis] = DECIMAL_RE.test(v) ? Number(v) : v;
+    }
+  }
+  const height = $("input[name=height]", fs).value.trim();
+  const ref = $("select[name=height_ref]", fs).value;
+  site[ref === "asl" ? "asl_m" : "agl_m"] = height === "" ? null : Number(height);
+  const ground = $("input[name=ground]", fs).value.trim();
+  if (ref === "agl" && ground !== "") site.ground_m = Number(ground);
+  return site;
+}
+
+function num(id) {
+  const v = $(`#${id}`).value.trim();
+  return v === "" ? undefined : Number(v);
+}
+
+function buildRequest() {
+  const tc = $("#terrain_check").value;
+  const options = {
+    freq_ghz: num("freq_ghz"),
+    zone: num("zone"),
+    sixty: $("#sixty").checked,
+    k: num("k"),
+    clutter_m: num("clutter"),
+    elev_source: $("#elev_source").value,
+    stations: num("stations"),
+    ring_points: num("ring_points"),
+    style: $("#style").value,
+    ring_every: num("ring_every"),
+    terrain_check: tc === "auto" ? null : tc === "on",
+    mode: $("#mode").value,
+    units: $("#units").value,
+    color: $("#color_random").checked ? "random" : $("#color").value,
+    coord_display: $("#coord_display").value,
+  };
+  Object.keys(options).forEach((k) => options[k] === undefined && delete options[k]);
+  return { site_a: readSite("site_a"), site_b: readSite("site_b"), options, format: "json" };
+}
+
+function showError(message, field) {
+  const box = $("#error");
+  box.textContent = message;
+  box.hidden = false;
+  if (field) {
+    const [site, name] = field.split(".");
+    const fs = siteFieldset(site);
+    if (fs) {
+      const input = $(`input[name=${{ agl_m: "height", asl_m: "height", ground_m: "ground" }[name] || name}]`, fs);
+      if (input) {
+        input.classList.add("invalid");
+        input.focus();
+      }
+    }
+  }
+}
+
+function fmt(v, digits = 2, unit = " m") {
+  return v === null || v === undefined ? "unknown" : `${v.toFixed(digits)}${unit}`;
+}
+
+function esc(text) {
+  const d = document.createElement("div");
+  d.textContent = String(text);
+  return d.innerHTML;
+}
+
+function showResult(data) {
+  const r = data.report;
+  lastKml = data.kml;
+  const [a, b] = r.sites;
+  lastFilename = `Fresnel_${a.name}_${b.name}`.replace(/[^A-Za-z0-9._-]+/g, "_") + ".kml";
+
+  const badge = $("#status-badge");
+  badge.textContent = r.status || "terrain not checked";
+  badge.className = `badge ${r.status || ""}`;
+
+  const rows = [];
+  for (const s of r.sites) {
+    const ground = s.ground_m === null ? "unknown" : `${s.ground_m.toFixed(1)} m (${s.ground_source})`;
+    rows.push([esc(s.name), `${esc(s.display)} <small>(from ${esc(s.from)})</small><br>ground ${esc(ground)}, AGL ${fmt(s.agl_m, 1)}, ASL ${fmt(s.asl_m, 1)}`]);
+  }
+  rows.push(["Distance", `${(r.distance_m / 1000).toFixed(3)} km`]);
+  rows.push(["Bearings", `A\u2192B ${r.bearing_ab.toFixed(1)}\u00b0, B\u2192A ${r.bearing_ba.toFixed(1)}\u00b0`]);
+  rows.push(["Max r1 / 0.6\u00b7r1", `${r.r1_max_m.toFixed(2)} m / ${r.r60_max_m.toFixed(2)} m`]);
+  if (r.zone !== 1) rows.push([`Max r${r.zone}`, `${r.zone_max_m.toFixed(2)} m`]);
+  if (r.terrain_checked) {
+    const c = r.min_clearance === null ? "n/a" : `${r.min_clearance.toFixed(2)} \u00d7 r1 at ${(r.min_clearance_d_m / 1000).toFixed(2)} km`;
+    rows.push(["Min clearance", c]);
+  }
+  rows.push(["Elevation source", esc(r.elevation_sources.join(", ") || "none")]);
+  $("#summary-table").innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
+
+  $("#swatch").style.background = r.zone_color.hex;
+  $("#swatch-text").textContent = `Zone color ${r.zone_color.hex} (${r.zone_color.random ? "random" : "chosen"})`;
+  if (r.zone_color.random) $("#color").value = r.zone_color.hex;
+
+  $("#warnings").innerHTML = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  drawProfile(r);
+  $("#result").hidden = false;
+  $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function drawProfile(r) {
+  const box = $("#profile-box");
+  const svg = $("#profile");
+  if (!r.terrain_checked || !r.profile.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const W = 800, H = 260, L = 60, R = 12, T = 12, B = 30;
+  const p = r.profile;
+  const dMax = p[p.length - 1].d_m || 1;
+  const ys = p.flatMap((q) => [q.effective_m, q.los_m, q.zone_bottom_m]);
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const pad = Math.max(5, (yMax - yMin) * 0.08);
+  yMin -= pad;
+  yMax += pad;
+  const x = (d) => L + (d / dMax) * (W - L - R);
+  const y = (v) => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
+  const line = (key) => p.map((q, i) => `${i ? "L" : "M"}${x(q.d_m).toFixed(1)},${y(q[key]).toFixed(1)}`).join("");
+  const ground = `M${x(0)},${y(yMin)}` + p.map((q) => `L${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`).join("") + `L${x(dMax)},${y(yMin)}Z`;
+  const ticks = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = yMin + ((yMax - yMin) * i) / 4;
+    ticks.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v.toFixed(0)} m</text>`);
+  }
+  for (let i = 0; i <= 5; i++) {
+    const d = (dMax * i) / 5;
+    const anchor = i === 0 ? "start" : i === 5 ? "end" : "middle";
+    ticks.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${(d / 1000).toFixed(2)} km</text>`);
+  }
+  const marks = p.filter((q) => q.clearance !== null && q.clearance < 0.6)
+    .map((q) => `<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} at ${(q.d_m / 1000).toFixed(2)} km</title></circle>`);
+  svg.innerHTML = ticks.join("") + `<path class="ground" d="${ground}"/>` +
+    `<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>` +
+    `<path class="los" d="${line("los_m")}"/>` + marks.join("");
+}
+
+async function submit(ev) {
+  ev.preventDefault();
+  $("#error").hidden = true;
+  $$("input.invalid").forEach((i) => i.classList.remove("invalid"));
+  const btn = $("#generate");
+  btn.disabled = true;
+  $("#busy").hidden = false;
+  try {
+    const resp = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildRequest()),
+    });
+    let data;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      throw new Error(`Server returned HTTP ${resp.status}.`);
+    }
+    if (!resp.ok) {
+      showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
+      return;
+    }
+    showResult(data);
+  } catch (err) {
+    showError(err.message || String(err));
+  } finally {
+    btn.disabled = false;
+    $("#busy").hidden = true;
+  }
+}
+
+function download() {
+  if (!lastKml) return;
+  const blob = new Blob([lastKml], { type: "application/vnd.google-earth.kml+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = lastFilename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function loadSources() {
+  try {
+    const resp = await fetch(`${API}?sources`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sel = $("#elev_source");
+    for (const s of data.sources || []) {
+      if (s.name === "auto") continue;
+      const opt = document.createElement("option");
+      opt.value = s.name;
+      opt.textContent = `${s.name} (${s.type})`;
+      sel.appendChild(opt);
+    }
+  } catch (err) {
+    /* the dropdown keeps just "auto" */
+  }
+}
+
+function init() {
+  ["site_a", "site_b"].forEach((k) => setupSite(siteFieldset(k)));
+  $("#color_random").addEventListener("change", (e) => { $("#color").disabled = e.target.checked; });
+  $("#terrain_check").addEventListener("change", updateLookupHint);
+  $("#link-form").addEventListener("submit", submit);
+  $("#download").addEventListener("click", download);
+  const curl = $("#curl-example");
+  curl.textContent = curl.textContent.replace("https://HOST/site/api/fresnel.cgi", new URL(API, location.href).href);
+  updateLookupHint();
+  loadSources();
+}
+
+init();

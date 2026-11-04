@@ -1,0 +1,368 @@
+"""Link analysis: site heights, path geometry, Fresnel radii and terrain clearance."""
+
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass, field
+
+from . import fresnel, geo
+from .colors import ColorError, ZoneColor, parse_color
+from .coords import DISPLAY_FORMATS, format_position
+
+MIN_DISTANCE_M = 1.0
+SHORT_LINK_M = 50.0
+LONG_LINK_M = 100_000.0
+MAX_STATIONS = 512
+MIN_TERRAIN_STATIONS = 16
+TERRAIN_SPACING_M = 250.0
+MIN_R1_FOR_CLEARANCE = 0.5
+CLEAR_RATIO = 0.6
+
+
+class AnalysisError(ValueError):
+    def __init__(self, message: str, field: str | None = None):
+        super().__init__(message)
+        self.field = field
+
+
+@dataclass
+class Site:
+    name: str
+    lat: float
+    lon: float
+    agl_m: float | None = None
+    ground_m: float | None = None
+    asl_m: float | None = None
+    position_format: str = "decimal"
+
+
+@dataclass
+class Options:
+    freq_ghz: float = 5.8
+    zone: int = 1
+    sixty: bool = True
+    k: float = 4.0 / 3.0
+    clutter_m: float = 0.0
+    elev_source: str = "auto"
+    stations: int = 64
+    ring_points: int = 24
+    style: str = "mesh"
+    ring_every: int = 4
+    terrain_check: bool | None = None  # None: on only when an elevation lookup is needed anyway
+    mode: str = "absolute"
+    color: str = "random"
+    coord_display: str = "decimal"
+
+
+@dataclass
+class SiteResult:
+    name: str
+    lat: float
+    lon: float
+    position_format: str
+    height_ref: str
+    asl_m: float
+    agl_m: float | None
+    ground_m: float | None
+    ground_source: str | None
+
+
+@dataclass
+class MeshStation:
+    t: float
+    lat: float
+    lon: float
+    bearing: float
+    los_m: float
+    radius_m: float
+    radius60_m: float
+
+
+@dataclass
+class ProfilePoint:
+    t: float
+    d_m: float
+    lat: float
+    lon: float
+    ground_m: float
+    bulge_m: float
+    effective_m: float
+    los_m: float
+    r1_m: float
+    clearance: float | None
+
+
+@dataclass
+class LinkReport:
+    site_a: SiteResult
+    site_b: SiteResult
+    options: Options
+    freq_hz: float
+    wavelength_m: float
+    distance_m: float
+    bearing_ab: float
+    bearing_ba: float
+    zone_max_m: float
+    r1_max_m: float
+    r60_max_m: float
+    stations: list[MeshStation]
+    zone_color: ZoneColor
+    terrain_checked: bool = False
+    profile: list[ProfilePoint] = field(default_factory=list)
+    min_clearance: float | None = None
+    min_clearance_d_m: float | None = None
+    status: str | None = None
+    elevation_sources: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def obstructions(self) -> list[ProfilePoint]:
+        return [p for p in self.profile if p.clearance is not None and p.clearance < CLEAR_RATIO]
+
+    def to_dict(self) -> dict:
+        def site(s: SiteResult) -> dict:
+            return {
+                "name": s.name, "lat": round(s.lat, 7), "lon": round(s.lon, 7),
+                "display": format_position(s.lat, s.lon, self.options.coord_display),
+                "from": s.position_format, "height_ref": s.height_ref,
+                "asl_m": _r(s.asl_m), "agl_m": _r(s.agl_m), "ground_m": _r(s.ground_m),
+                "ground_source": s.ground_source,
+            }
+
+        return {
+            "sites": [site(self.site_a), site(self.site_b)],
+            "freq_ghz": self.freq_hz / 1e9,
+            "wavelength_m": round(self.wavelength_m, 8),
+            "zone": self.options.zone,
+            "k": self.options.k,
+            "clutter_m": self.options.clutter_m,
+            "distance_m": _r(self.distance_m),
+            "bearing_ab": round(self.bearing_ab, 2),
+            "bearing_ba": round(self.bearing_ba, 2),
+            "zone_max_m": _r(self.zone_max_m, 3),
+            "r1_max_m": _r(self.r1_max_m, 3),
+            "r60_max_m": _r(self.r60_max_m, 3),
+            "terrain_checked": self.terrain_checked,
+            "min_clearance": None if self.min_clearance is None else round(self.min_clearance, 3),
+            "min_clearance_d_m": _r(self.min_clearance_d_m),
+            "status": self.status,
+            "zone_color": self.zone_color.to_dict(),
+            "elevation_sources": self.elevation_sources,
+            "profile": [{
+                "d_m": _r(p.d_m), "lat": round(p.lat, 7), "lon": round(p.lon, 7),
+                "ground_m": _r(p.ground_m), "effective_m": _r(p.effective_m), "los_m": _r(p.los_m),
+                "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
+                "r60_bottom_m": _r(p.los_m - CLEAR_RATIO * p.r1_m),
+                "clearance": None if p.clearance is None else round(p.clearance, 3),
+            } for p in self.profile],
+            "warnings": self.warnings,
+        }
+
+
+def _r(value, digits: int = 2):
+    return None if value is None else round(value, digits)
+
+
+def _finite(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def validate_options(opt: Options) -> None:
+    checks = [
+        ("freq_ghz", _finite(opt.freq_ghz) and 0.03 <= opt.freq_ghz <= 100, "must be between 0.03 and 100 GHz"),
+        ("zone", isinstance(opt.zone, int) and not isinstance(opt.zone, bool) and 1 <= opt.zone <= 10,
+         "must be an integer from 1 to 10"),
+        ("k", _finite(opt.k) and 0.1 <= opt.k <= 100, "must be between 0.1 and 100"),
+        ("clutter_m", _finite(opt.clutter_m) and 0 <= opt.clutter_m <= 200, "must be between 0 and 200 m"),
+        ("stations", isinstance(opt.stations, int) and not isinstance(opt.stations, bool)
+         and 2 <= opt.stations <= MAX_STATIONS, f"must be an integer from 2 to {MAX_STATIONS}"),
+        ("ring_points", isinstance(opt.ring_points, int) and 6 <= opt.ring_points <= 72,
+         "must be an integer from 6 to 72"),
+        ("ring_every", isinstance(opt.ring_every, int) and opt.ring_every >= 1, "must be a positive integer"),
+        ("style", opt.style in ("mesh", "rings"), "must be 'mesh' or 'rings'"),
+        ("mode", opt.mode in ("absolute", "relative"), "must be 'absolute' or 'relative'"),
+        ("coord_display", opt.coord_display in DISPLAY_FORMATS, f"must be one of {', '.join(DISPLAY_FORMATS)}"),
+        ("terrain_check", opt.terrain_check in (None, True, False), "must be true, false or null"),
+        ("sixty", isinstance(opt.sixty, bool), "must be true or false"),
+        ("elev_source", isinstance(opt.elev_source, str) and opt.elev_source != "", "must be a source name"),
+    ]
+    for name, ok, message in checks:
+        if not ok:
+            raise AnalysisError(f"options.{name} {message}.", f"options.{name}")
+
+
+def validate_site(site: Site, label: str) -> None:
+    if not isinstance(site.name, str) or not site.name.strip():
+        raise AnalysisError(f"{label}.name is required.", f"{label}.name")
+    if len(site.name) > 100:
+        raise AnalysisError(f"{label}.name is longer than 100 characters.", f"{label}.name")
+    if not _finite(site.lat) or not -90 <= site.lat <= 90:
+        raise AnalysisError(f"{label}.lat must be within \u00b190.", f"{label}.lat")
+    if not _finite(site.lon) or not -180 <= site.lon <= 180:
+        raise AnalysisError(f"{label}.lon must be within \u00b1180.", f"{label}.lon")
+    if (site.agl_m is None) == (site.asl_m is None):
+        raise AnalysisError(f"{label} needs exactly one of agl_m (above ground) or asl_m (above sea level).",
+                            f"{label}.agl_m")
+    if site.agl_m is not None and (not _finite(site.agl_m) or not 0 <= site.agl_m < 1000):
+        raise AnalysisError(f"{label}.agl_m must be at least 0 and below 1000 m.", f"{label}.agl_m")
+    if site.asl_m is not None and (not _finite(site.asl_m) or not -500 <= site.asl_m <= 9000):
+        raise AnalysisError(f"{label}.asl_m must be between -500 and 9000 m.", f"{label}.asl_m")
+    if site.ground_m is not None:
+        if not _finite(site.ground_m) or not -500 <= site.ground_m <= 9000:
+            raise AnalysisError(f"{label}.ground_m must be between -500 and 9000 m.", f"{label}.ground_m")
+        if site.asl_m is not None and site.asl_m - site.ground_m < 0:
+            raise AnalysisError(f"{label}.asl_m is below its ground_m.", f"{label}.asl_m")
+
+
+def terrain_station_count(distance_m: float, stations: int) -> int:
+    n = max(stations, math.ceil(distance_m / TERRAIN_SPACING_M), MIN_TERRAIN_STATIONS)
+    return min(n, MAX_STATIONS)
+
+
+def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, elevation=None, config=None,
+            rng: random.Random | None = None, env=None) -> LinkReport:
+    """Compute everything needed to render the KML. `elevation` is an ElevationChain (built from
+    the server config when omitted and a lookup is needed)."""
+    opt = options or Options()
+    validate_options(opt)
+    validate_site(site_a, "site_a")
+    validate_site(site_b, "site_b")
+    warnings: list[str] = []
+
+    try:
+        zone_color = parse_color(opt.color, rng)
+    except ColorError as exc:
+        raise AnalysisError(str(exc), "options.color") from None
+
+    for label, s in (("site_a", site_a), ("site_b", site_b)):
+        if opt.mode == "relative" and s.asl_m is not None and s.ground_m is None:
+            raise AnalysisError(f"{label}: relative mode needs the height above ground; give agl_m, or ground_m "
+                                "along with asl_m.", f"{label}.asl_m")
+
+    distance, bearing_ab, bearing_ba = geo.inverse(site_a.lat, site_a.lon, site_b.lat, site_b.lon)
+    if distance < MIN_DISTANCE_M:
+        raise AnalysisError("The two sites are less than 1 m apart.", "site_b")
+    n_mesh = opt.stations
+    if distance < SHORT_LINK_M:
+        warnings.append(f"Very short link ({distance:.1f} m); results may not be meaningful.")
+        n_mesh = max(n_mesh, 8)
+    if distance > LONG_LINK_M:
+        warnings.append(f"Long link ({distance / 1000:.1f} km); {opt.freq_ghz:g} GHz is unusual at this range "
+                        "and earth bulge matters.")
+    if not geo.have_pyproj() and max(abs(site_a.lat), abs(site_b.lat)) > geo.POLAR_LIMIT_DEG:
+        warnings.append("Near the pole without pyproj installed; geometry uses a spherical approximation.")
+
+    needs_ground = [s.agl_m is not None and s.ground_m is None for s in (site_a, site_b)]
+    terrain = opt.terrain_check if opt.terrain_check is not None else any(needs_ground)
+
+    profile_pts = geo.path_points(site_a.lat, site_a.lon, site_b.lat, site_b.lon,
+                                  terrain_station_count(distance, n_mesh)) if terrain else []
+    lookup_pts: list[tuple[float, float]] = []
+    if terrain:
+        lookup_pts = [(p.lat, p.lon) for p in profile_pts]
+    else:
+        lookup_pts = [(s.lat, s.lon) for s, need in zip((site_a, site_b), needs_ground) if need]
+
+    looked_up = []
+    if lookup_pts:
+        chain = elevation
+        if chain is None:
+            from .config import build_chain, load_config
+            cfg = config or load_config(env=env)
+            try:
+                chain = build_chain(cfg, only=opt.elev_source, env=env)
+            except KeyError:
+                raise AnalysisError(f"Unknown elevation source '{opt.elev_source}'.", "options.elev_source") from None
+        elif opt.elev_source not in ("auto", None):
+            try:
+                chain = chain.only(opt.elev_source)
+            except KeyError:
+                raise AnalysisError(f"Unknown elevation source '{opt.elev_source}'.", "options.elev_source") from None
+        looked_up = chain.lookup(lookup_pts)
+        if any(r.assumed_zero for r in looked_up):
+            count = sum(r.assumed_zero for r in looked_up)
+            warnings.append(f"{count} point(s) returned no elevation (open water?); treated as 0 m.")
+
+    if terrain:
+        site_lookup = [looked_up[0], looked_up[-1]]
+    else:
+        it = iter(looked_up)
+        site_lookup = [next(it) if need else None for need in needs_ground]
+
+    results = []
+    for label, s, found in (("site_a", site_a, site_lookup[0]), ("site_b", site_b, site_lookup[1])):
+        if s.ground_m is not None:
+            ground, source = float(s.ground_m), "manual"
+        elif found is not None:
+            ground, source = found.elevation, found.source
+        else:
+            ground, source = None, None
+        if s.agl_m is not None:
+            asl = ground + s.agl_m
+            agl = float(s.agl_m)
+            ref = "agl"
+        else:
+            asl = float(s.asl_m)
+            ref = "asl"
+            agl = None if ground is None else asl - ground
+            if agl is not None and agl < 0 and s.ground_m is None:
+                warnings.append(f"{s.name}: the given height above sea level is {-agl:.1f} m below the "
+                                f"looked-up ground ({source}).")
+        results.append(SiteResult(s.name, s.lat, s.lon, s.position_format, ref, asl, agl, ground, source))
+    ra, rb = results
+
+    lam = fresnel.wavelength(opt.freq_ghz * 1e9)
+    stations = []
+    for p in geo.path_points(site_a.lat, site_a.lon, site_b.lat, site_b.lon, n_mesh):
+        d1 = p.t * distance
+        d2 = distance - d1
+        los = (1 - p.t) * ra.asl_m + p.t * rb.asl_m
+        r_n = fresnel.zone_radius(d1, d2, lam, opt.zone)
+        r1 = fresnel.zone_radius(d1, d2, lam, 1)
+        stations.append(MeshStation(p.t, p.lat, p.lon, p.bearing, los, r_n, CLEAR_RATIO * r1))
+
+    report = LinkReport(
+        site_a=ra, site_b=rb, options=opt, freq_hz=opt.freq_ghz * 1e9, wavelength_m=lam,
+        distance_m=distance, bearing_ab=bearing_ab, bearing_ba=bearing_ba,
+        zone_max_m=fresnel.max_radius(distance, lam, opt.zone),
+        r1_max_m=fresnel.max_radius(distance, lam, 1),
+        r60_max_m=CLEAR_RATIO * fresnel.max_radius(distance, lam, 1),
+        stations=stations, zone_color=zone_color, warnings=warnings,
+    )
+
+    if terrain:
+        report.terrain_checked = True
+        min_c = None
+        min_d = None
+        for p, found in zip(profile_pts, looked_up):
+            d1 = p.t * distance
+            d2 = distance - d1
+            bulge = fresnel.earth_bulge(d1, d2, opt.k)
+            effective = found.elevation + bulge + opt.clutter_m
+            los = (1 - p.t) * ra.asl_m + p.t * rb.asl_m
+            r1 = fresnel.zone_radius(d1, d2, lam, 1)
+            c = (los - effective) / r1 if r1 >= MIN_R1_FOR_CLEARANCE else None
+            report.profile.append(ProfilePoint(p.t, d1, p.lat, p.lon, found.elevation, bulge, effective,
+                                               los, r1, c))
+            if c is not None and (min_c is None or c < min_c):
+                min_c, min_d = c, d1
+        report.min_clearance = min_c
+        report.min_clearance_d_m = min_d
+        if min_c is None:
+            report.status = "UNKNOWN"
+            warnings.append("Link too short for a meaningful Fresnel clearance check.")
+        elif min_c >= CLEAR_RATIO:
+            report.status = "CLEAR"
+        elif min_c >= 0:
+            report.status = "MARGINAL"
+        else:
+            report.status = "BLOCKED"
+
+    sources = [r.ground_source for r in (ra, rb) if r.ground_source]
+    sources += [r.source for r in looked_up]
+    report.elevation_sources = list(dict.fromkeys(sources))
+    if opt.mode == "relative":
+        warnings.append("Relative mode: towers follow Google Earth terrain, but the line of sight and the "
+                        "Fresnel zone are still drawn at absolute altitudes.")
+    return report

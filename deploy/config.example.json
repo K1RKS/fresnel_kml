@@ -1,0 +1,15 @@
+{
+  "elevation": {
+    "chain": [
+      {"name": "opentopodata", "type": "opentopodata",
+       "url": "https://api.opentopodata.org/v1", "datasets": "ned10m,srtm30m",
+       "batch": 100, "min_interval_s": 1.0},
+      {"name": "local", "type": "local_hgt", "path": "/var/lib/fresnelkml/hgt"},
+      {"name": "mesh-otd", "type": "opentopodata", "url": "http://10.0.0.5:5000/v1",
+       "datasets": "srtm30m", "batch": 500, "min_interval_s": 0}
+    ],
+    "timeout_s": 10,
+    "retries": 2,
+    "cache_dir": "/var/cache/fresnelkml"
+  }
+}
