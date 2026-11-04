@@ -202,8 +202,19 @@ function showError(message, field) {
   }
 }
 
-function fmt(v, digits = 2, unit = " m") {
-  return v === null || v === undefined ? "unknown" : `${v.toFixed(digits)}${unit}`;
+const FEET = 0.3048;
+let resultUnits = "m";
+
+// The API always reports metres; show heights in the units the request used.
+function hfmt(metres, digits = 1) {
+  if (metres === null || metres === undefined) return "unknown";
+  const value = resultUnits === "ft" ? metres / FEET : metres;
+  return `${value.toFixed(digits)} ${resultUnits}`;
+}
+
+function updateUnitLabels() {
+  const unit = $("#units").value;
+  $$(".unit").forEach((el) => { el.textContent = unit; });
 }
 
 function esc(text) {
@@ -212,7 +223,8 @@ function esc(text) {
   return d.innerHTML;
 }
 
-function showResult(data) {
+function showResult(data, units) {
+  resultUnits = units === "ft" ? "ft" : "m";
   const r = data.report;
   lastKml = data.kml;
   const [a, b] = r.sites;
@@ -224,13 +236,13 @@ function showResult(data) {
 
   const rows = [];
   for (const s of r.sites) {
-    const ground = s.ground_m === null ? "unknown" : `${s.ground_m.toFixed(1)} m (${s.ground_source})`;
-    rows.push([esc(s.name), `${esc(s.display)} <small>(from ${esc(s.from)})</small><br>ground ${esc(ground)}, AGL ${fmt(s.agl_m, 1)}, ASL ${fmt(s.asl_m, 1)}`]);
+    const ground = s.ground_m === null ? "unknown" : `${hfmt(s.ground_m)} (${s.ground_source})`;
+    rows.push([esc(s.name), `${esc(s.display)} <small>(from ${esc(s.from)})</small><br>ground ${esc(ground)}, AGL ${hfmt(s.agl_m)}, ASL ${hfmt(s.asl_m)}`]);
   }
   rows.push(["Distance", `${(r.distance_m / 1000).toFixed(3)} km`]);
   rows.push(["Bearings", `A\u2192B ${r.bearing_ab.toFixed(1)}\u00b0, B\u2192A ${r.bearing_ba.toFixed(1)}\u00b0`]);
-  rows.push(["Max r1 / 0.6\u00b7r1", `${r.r1_max_m.toFixed(2)} m / ${r.r60_max_m.toFixed(2)} m`]);
-  if (r.zone !== 1) rows.push([`Max r${r.zone}`, `${r.zone_max_m.toFixed(2)} m`]);
+  rows.push(["Max r1 / 0.6\u00b7r1", `${hfmt(r.r1_max_m, 2)} / ${hfmt(r.r60_max_m, 2)}`]);
+  if (r.zone !== 1) rows.push([`Max r${r.zone}`, hfmt(r.zone_max_m, 2)]);
   if (r.terrain_checked) {
     const c = r.min_clearance === null ? "n/a" : `${r.min_clearance.toFixed(2)} \u00d7 r1 at ${(r.min_clearance_d_m / 1000).toFixed(2)} km`;
     rows.push(["Min clearance", c]);
@@ -271,7 +283,7 @@ function drawProfile(r) {
   const ticks = [];
   for (let i = 0; i <= 4; i++) {
     const v = yMin + ((yMax - yMin) * i) / 4;
-    ticks.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v.toFixed(0)} m</text>`);
+    ticks.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${hfmt(v, 0)}</text>`);
   }
   for (let i = 0; i <= 5; i++) {
     const d = (dMax * i) / 5;
@@ -292,11 +304,12 @@ async function submit(ev) {
   const btn = $("#generate");
   btn.disabled = true;
   $("#busy").hidden = false;
+  const request = buildRequest();
   try {
     const resp = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildRequest()),
+      body: JSON.stringify(request),
     });
     let data;
     try {
@@ -308,7 +321,7 @@ async function submit(ev) {
       showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
       return;
     }
-    showResult(data);
+    showResult(data, request.options.units);
   } catch (err) {
     showError(err.message || String(err));
   } finally {
@@ -352,6 +365,8 @@ function init() {
   ["site_a", "site_b"].forEach((k) => setupSite(siteFieldset(k)));
   $("#color_random").addEventListener("change", (e) => { $("#color").disabled = e.target.checked; });
   $("#terrain_check").addEventListener("change", updateLookupHint);
+  $("#units").addEventListener("change", updateUnitLabels);
+  updateUnitLabels();
   $("#link-form").addEventListener("submit", submit);
   $("#download").addEventListener("click", download);
   const curl = $("#curl-example");
