@@ -37,13 +37,14 @@ def test_slim_new_feed():
     assert (n["height_m"], n["azimuth_deg"], n["beamwidth_deg"], n["gain_dbi"]) == (25.0, 96.0, 8.0, 25.0)
     assert n["elevation_deg"] == 0.0
     assert n["antenna"] == "Ubiquiti RD-5G30" and n["freq_mhz"] == 5805.0
-    assert n["links"] == [{"id": "parrett-sector", "type": "RF", "distance_km": 9.8, "bearing_deg": 237.4,
-                           "signal_dbm": -64.0}]
+    assert n["links"] == [{"id": "parrett-sector", "name": "Parrett-Sector", "type": "RF", "distance_km": 9.8,
+                           "bearing_deg": 237.4, "signal_dbm": -64.0}]
 
 
 def test_slim_link_without_id_uses_hostname():
     n = slim_node({**PARRETT, "links": [{"hostname": "K1RKS-Tower.local.mesh", "linkType": "RF"}]})
-    assert n["links"][0]["id"] == "k1rks-tower" and n["links"][0]["distance_km"] is None
+    assert n["links"][0]["id"] == "k1rks-tower" and n["links"][0]["name"] == "K1RKS-Tower"
+    assert n["links"][0]["distance_km"] is None
 
 
 def test_slim_old_feed_shape():

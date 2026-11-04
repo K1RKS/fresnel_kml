@@ -33,10 +33,11 @@ def _slim_link(link) -> dict | None:
     # Only RF links can be a Fresnel path; tunnels and DTD would bloat the list
     if not isinstance(link, dict) or str(link.get("linkType") or "").upper() != "RF":
         return None
-    lid = str(link.get("id") or _short_host(link.get("hostname")).lower())
+    host = _short_host(link.get("hostname"))
+    lid = str(link.get("id") or host.lower())
     if not lid:
         return None
-    return {"id": lid, "type": str(link.get("linkType") or ""), "distance_km": _num(link.get("distance_km")),
+    return {"id": lid, "name": host or lid, "type": str(link.get("linkType") or ""), "distance_km": _num(link.get("distance_km")),
             "bearing_deg": _num(link.get("bearing_deg")), "signal_dbm": _num(link.get("signal_dbm"))}
 
 

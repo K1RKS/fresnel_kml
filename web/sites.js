@@ -16,8 +16,9 @@ const FIELD_LABELS = { name: "name", lat: "latitude", lon: "longitude", height_m
   height_ref: "height reference", ground_m: "ground elevation" };
 const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref", gnd: "ground_m" };
 
+// link: in link selection, the RF link chosen for Site B when its node has no location in the feed.
 function blankSite() {
-  return { node: null, snap: null, ov: {} };
+  return { node: null, snap: null, link: null, ov: {} };
 }
 
 // sites[key].ov holds, for a picked node, only the fields that differ from the node (heights
@@ -234,6 +235,7 @@ function pickSite(key, node) {
   const s = siteState.sites[key];
   s.node = node.id;
   s.snap = node;
+  s.link = null;
   s.ov = {};
   delete missingNotes[key];
   siteState.freq_ov = null;
@@ -244,6 +246,28 @@ function pickSite(key, node) {
   fillLinkOptions();
   updateLookupHint();
   save();
+}
+
+function unmappedNote(link) {
+  return `${link.name || link.id} has no location in the node feed; enter its latitude, longitude and antenna height.`;
+}
+
+// A link to a node the feed has no location for: Site B gets its name and the link's frequency,
+// and the user enters the rest.
+function pickUnmappedLink(link) {
+  siteState.sites.site_b = { node: null, snap: null, link: link.id, ov: { name: link.name || link.id, height_ref: "agl" } };
+  missingNotes.site_b = unmappedNote(link);
+  siteState.freq_ov = null;
+  $("#error").hidden = true;
+  applySite("site_b");
+  applyFreq();
+  updateLookupHint();
+  save();
+}
+
+function chosenLink() {
+  const b = siteState.sites.site_b;
+  return b.node || b.link;
 }
 
 // Clearing the Mesh node box drops the pick; the site keeps its values as manual entry.
@@ -459,6 +483,11 @@ function renderMode() {
 function setMode(mode) {
   if (mode === siteState.mode) return;
   siteState.mode = mode;
+  if (mode === "node" && siteState.sites.site_b.link) {
+    siteState.sites.site_b.link = null;
+    delete missingNotes.site_b;
+    refreshOverrides("site_b");
+  }
   keepLinkedB();
   renderMode();
   fillLinkOptions();
@@ -470,9 +499,9 @@ function setMode(mode) {
 // In link selection, Site B must be one of Site A's RF links.
 function keepLinkedB() {
   const a = pickedNode("site_a");
-  const b = siteState.sites.site_b;
-  if (siteState.mode !== "link" || !a || !b.node || rfLinks(a).some((l) => l.id === b.node)) return;
-  siteState.sites.site_b = { node: null, snap: null, ov: { height_ref: "agl" } };
+  const id = chosenLink();
+  if (siteState.mode !== "link" || !a || !id || rfLinks(a).some((l) => l.id === id)) return;
+  siteState.sites.site_b = { node: null, snap: null, link: null, ov: { height_ref: "agl" } };
   delete missingNotes.site_b;
   applySite("site_b");
 }
@@ -492,13 +521,14 @@ function fillLinkOptions() {
   for (const l of links) {
     const n = nodeById.get(l.id);
     const parts = [linkWhere(l, units), l.signal_dbm !== null ? `${l.signal_dbm.toFixed(0)} dBm` : null].filter(Boolean);
-    const label = `${n ? n.name : l.id}${parts.length ? " \u2014 " + parts.join(", ") : ""}${n ? "" : " (not in the feed)"}`;
-    opts.push(`<option value="${esc(l.id)}"${n ? "" : " disabled"}>${esc(label)}</option>`);
+    const label = `${n ? n.name : l.name || l.id}${parts.length ? " \u2014 " + parts.join(", ") : ""}`
+      + (n ? "" : " (no location in the feed)");
+    opts.push(`<option value="${esc(l.id)}">${esc(label)}</option>`);
   }
   sel.innerHTML = opts.join("");
   sel.disabled = !links.length;
-  const b = siteState.sites.site_b.node;
-  sel.value = b && links.some((l) => l.id === b && nodeById.has(l.id)) ? b : "";
+  const id = chosenLink();
+  sel.value = id && links.some((l) => l.id === id) ? id : "";
 }
 
 // Why Generate Report can't run yet, or null.
@@ -506,8 +536,11 @@ function sitesProblem() {
   if (siteState.mode !== "link") return null;
   const a = pickedNode("site_a");
   if (!a) return "In link selection, Site A must be a mesh node: pick one in its Mesh node box.";
-  const b = siteState.sites.site_b.node;
-  if (!b || !rfLinks(a).some((l) => l.id === b)) return `Choose one of ${a.name}'s links for Site B.`;
+  const id = chosenLink();
+  if (!id || !rfLinks(a).some((l) => l.id === id)) {
+    return rfLinks(a).length ? `Choose one of ${a.name}'s links for Site B.`
+      : `${a.name} has no RF links in the feed; use Node selection to enter Site B.`;
+  }
   return null;
 }
 
@@ -524,7 +557,10 @@ function setupModes() {
   });
   $("select[name=link]", siteFieldset("site_b")).addEventListener("change", (ev) => {
     const node = nodeById.get(ev.target.value);
+    const a = pickedNode("site_a");
+    const link = a && rfLinks(a).find((l) => l.id === ev.target.value);
     if (node) pickSite("site_b", node);
+    else if (link) pickUnmappedLink(link);
   });
 }
 
@@ -556,7 +592,7 @@ function toUrl() {
   if (siteState.freq_ov !== null) p.set("f", String(siteState.freq_ov));
   for (const [key, pre] of [["site_a", "a"], ["site_b", "b"]]) {
     const s = siteState.sites[key];
-    if (s.node) p.set(pre, s.node);
+    if (s.node || s.link) p.set(pre, s.node || s.link);
     for (const [short, name] of Object.entries(URL_FIELDS)) {
       const v = s.ov[name];
       if (v === undefined || v === null) continue;
@@ -622,7 +658,16 @@ function finishRestore() {
     s.ov = saved.ov && typeof saved.ov === "object" ? { ...saved.ov } : {};
     s.node = typeof saved.node === "string" && saved.node ? saved.node : null;
     s.snap = (s.node && nodeById.get(s.node)) || saved.snap || null;
-    if (s.node && !s.snap) {
+    s.link = typeof saved.link === "string" && saved.link ? saved.link : null;
+    const a = key === "site_b" && pickedNode("site_a");
+    const unmapped = a && rfLinks(a).find((l) => l.id === (s.link || (!s.snap && s.node)));
+    if (unmapped) {
+      s.node = null;
+      s.snap = null;
+      s.link = unmapped.id;
+      if (!s.ov.name) s.ov.name = unmapped.name || unmapped.id;
+      missingNotes[key] = unmappedNote(unmapped);
+    } else if (s.node && !s.snap) {
       missingNotes[key] = meshNodes.length ? `Mesh node ${s.node} wasn't found in the feed; enter the site by hand.`
         : `The node feed is unavailable, so mesh node ${s.node} couldn't be loaded.`;
       s.node = null;
