@@ -36,7 +36,7 @@ def _terrain_report(fake_chain, units):
 
 def test_min_clearance_height(fake_chain):
     r = _terrain_report(fake_chain, "m")
-    worst = min((p for p in r.profile if p.clearance is not None), key=lambda p: p.clearance)
+    worst = min((p for p in r.all_samples if p.clearance is not None), key=lambda p: p.clearance)
     assert r.min_clearance_m == pytest.approx(worst.los_m - worst.effective_m)
     assert r.to_dict()["min_clearance_m"] == round(r.min_clearance_m, 2)
 

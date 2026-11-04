@@ -36,7 +36,7 @@ def test_default_terrain_check_with_one_agl_site_samples_the_path(fake_chain):
     chain, provider = fake_chain(lambda lat, lon: 100.0)
     r = analyze(Site("A", 37.0, -122.0, asl_m=150), Site("B", 37.05, -121.9, agl_m=20), elevation=chain)
     assert r.terrain_checked
-    assert sum(len(c) for c in provider.calls) == len(r.profile)
+    assert sum(len(c) for c in provider.calls) == len(r.profile) + len(r.profile_a) + len(r.profile_b)
 
 
 def test_asl_sites_with_explicit_terrain_check(fake_chain):
@@ -44,7 +44,7 @@ def test_asl_sites_with_explicit_terrain_check(fake_chain):
     r = analyze(Site("A", 37.0, -122.0, asl_m=150), Site("B", 37.05, -121.9, asl_m=180),
                 Options(terrain_check=True), elevation=chain)
     assert r.terrain_checked and r.status == "CLEAR"
-    assert sum(len(c) for c in provider.calls) == len(r.profile)
+    assert sum(len(c) for c in provider.calls) == len(r.profile) + len(r.profile_a) + len(r.profile_b)
     assert r.site_a.ground_m == 100.0 and r.site_a.agl_m == 50.0
 
 

@@ -285,39 +285,82 @@ function showResult(data, units) {
 
 function drawProfile(r) {
   const box = $("#profile-box");
-  const svg = $("#profile");
   if (!r.terrain_checked || !r.profile.length) {
     box.hidden = true;
     return;
   }
   box.hidden = false;
-  const W = 800, H = 260, L = 60, R = 12, T = 12, B = 30;
+  const [a, b] = r.sites;
+  const D = r.distance_m;
   const p = r.profile;
-  const dMax = p[p.length - 1].d_m || 1;
-  const ys = p.flatMap((q) => [q.effective_m, q.los_m, q.zone_bottom_m]);
+  const masts = [
+    { d: 0, name: a.name, ground: p[0].ground_m, top: p[0].los_m },
+    { d: D, name: b.name, ground: p[p.length - 1].ground_m, top: p[p.length - 1].los_m },
+  ];
+  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a" });
+  const zoom = [[r.profile_a, "a", "#profile-a", "#profile-title-a", `First ${dfmt(r.end_window_m)} from ${a.name}`],
+                [r.profile_b, "b", "#profile-b", "#profile-title-b", `Last ${dfmt(r.end_window_m)} to ${b.name}`]];
+  for (const [pts, from, svgSel, titleSel, title] of zoom) {
+    const show = pts && pts.length > 1;
+    $(svgSel).hidden = $(titleSel).hidden = !show;
+    if (!show) continue;
+    $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
+    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from });
+  }
+}
+
+// One terrain-profile chart. Every chart has the same pixel size; each picks its own X and Y scale.
+// opts.from is "a" (label distances from site A) or "b" (label distances to site B).
+function drawPlot(svg, p, opts) {
+  const W = 800, H = 260, L = 60, R = 14, T = 26, B = 30;
+  const D = opts.masts[1].d;
+  const { d0, d1 } = opts;
+  const span = d1 - d0 || 1;
+  const eps = span * 1e-6;
+  const visible = opts.masts.filter((m) => m.d >= d0 - eps && m.d <= d1 + eps);
+  const ys = p.flatMap((q) => [q.effective_m, q.los_m, q.zone_bottom_m])
+    .concat(visible.flatMap((m) => [m.ground, m.top]));
   let yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const pad = Math.max(5, (yMax - yMin) * 0.08);
+  const pad = Math.max(3, (yMax - yMin) * 0.08);
   yMin -= pad;
   yMax += pad;
-  const x = (d) => L + (d / dMax) * (W - L - R);
+  const x = (d) => L + ((d - d0) / span) * (W - L - R);
   const y = (v) => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
   const line = (key) => p.map((q, i) => `${i ? "L" : "M"}${x(q.d_m).toFixed(1)},${y(q[key]).toFixed(1)}`).join("");
-  const ground = `M${x(0)},${y(yMin)}` + p.map((q) => `L${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`).join("") + `L${x(dMax)},${y(yMin)}Z`;
-  const ticks = [];
+  const ground = `M${x(d0)},${y(yMin)}` + p.map((q) => `L${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`).join("") + `L${x(d1)},${y(yMin)}Z`;
+  const parts = [];
   for (let i = 0; i <= 4; i++) {
     const v = yMin + ((yMax - yMin) * i) / 4;
-    ticks.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${hfmt(v, 0)}</text>`);
+    parts.push(`<line class="axis" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${hfmt(v, 0)}</text>`);
   }
   for (let i = 0; i <= 5; i++) {
-    const d = (dMax * i) / 5;
+    const d = d0 + (span * i) / 5;
     const anchor = i === 0 ? "start" : i === 5 ? "end" : "middle";
-    ticks.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${dfmt(d, 2)}</text>`);
+    const label = dfmt(opts.from === "b" ? Math.max(0, D - d) : d, 2);
+    parts.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${label}</text>`);
   }
-  const marks = p.filter((q) => q.clearance !== null && q.clearance < 0.6)
-    .map((q) => `<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)}</title></circle>`);
-  svg.innerHTML = ticks.join("") + `<path class="ground" d="${ground}"/>` +
-    `<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>` +
-    `<path class="los" d="${line("los_m")}"/>` + marks.join("");
+  parts.push(`<path class="ground" d="${ground}"/>`,
+    `<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>`,
+    `<path class="los" d="${line("los_m")}"/>`);
+  for (const q of p.filter((q) => q.clearance !== null && q.clearance < 0.6)) {
+    parts.push(`<circle class="obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.effective_m).toFixed(1)}" r="3"><title>clearance ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(opts.masts[0].name)}</title></circle>`);
+  }
+  for (const m of opts.masts) {
+    if (visible.includes(m)) {
+      const mx = x(m.d);
+      const anchor = mx < L + 60 ? "start" : mx > W - R - 60 ? "end" : "middle";
+      const tx = anchor === "start" ? mx + 5 : anchor === "end" ? mx - 5 : mx;
+      parts.push(`<line class="mast" x1="${mx}" x2="${mx}" y1="${y(m.ground)}" y2="${y(m.top)}"/>`,
+        `<circle class="mast-top" cx="${mx}" cy="${y(m.top)}" r="4"/>`,
+        `<text class="site-label" x="${tx}" y="${y(m.top) - 8}" text-anchor="${anchor}">${esc(m.name)}</text>`);
+    } else {
+      const left = m.d < d0;
+      const away = dfmt(left ? d0 - m.d : m.d - d1, 2);
+      const text = left ? `\u2190 ${esc(m.name)} (${away})` : `${esc(m.name)} (${away}) \u2192`;
+      parts.push(`<text class="offsite" x="${left ? L + 4 : W - R - 4}" y="${T - 10}" text-anchor="${left ? "start" : "end"}">${text}</text>`);
+    }
+  }
+  svg.innerHTML = parts.join("");
 }
 
 async function submit(ev) {

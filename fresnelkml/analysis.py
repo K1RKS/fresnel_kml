@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
+from .elevation import ElevationResult
 from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
@@ -19,6 +20,8 @@ MIN_TERRAIN_STATIONS = 16
 TERRAIN_SPACING_M = 250.0
 MIN_R1_FOR_CLEARANCE = 0.5
 CLEAR_RATIO = 0.6
+END_WINDOW_M = 500 * 0.3048  # close-up terrain sampling next to each tower
+END_SAMPLES = 25
 
 
 class AnalysisError(ValueError):
@@ -112,6 +115,9 @@ class LinkReport:
     zone_color: ZoneColor
     terrain_checked: bool = False
     profile: list[ProfilePoint] = field(default_factory=list)
+    profile_a: list[ProfilePoint] = field(default_factory=list)  # close-up next to site A
+    profile_b: list[ProfilePoint] = field(default_factory=list)  # close-up next to site B
+    end_window_m: float | None = None
     min_clearance: float | None = None
     min_clearance_d_m: float | None = None
     min_clearance_m: float | None = None  # line of sight minus effective terrain at the worst point
@@ -120,8 +126,14 @@ class LinkReport:
     warnings: list[str] = field(default_factory=list)
 
     @property
+    def all_samples(self) -> list[ProfilePoint]:
+        """Main profile plus the close-up samples near each tower, in path order."""
+        merged = {round(p.d_m, 3): p for p in self.profile + self.profile_a + self.profile_b}
+        return [merged[d] for d in sorted(merged)]
+
+    @property
     def obstructions(self) -> list[ProfilePoint]:
-        return [p for p in self.profile if p.clearance is not None and p.clearance < CLEAR_RATIO]
+        return [p for p in self.all_samples if p.clearance is not None and p.clearance < CLEAR_RATIO]
 
     def to_dict(self) -> dict:
         def site(s: SiteResult) -> dict:
@@ -154,19 +166,42 @@ class LinkReport:
             "status": self.status,
             "zone_color": self.zone_color.to_dict(),
             "elevation_sources": self.elevation_sources,
-            "profile": [{
-                "d_m": _r(p.d_m), "lat": round(p.lat, 7), "lon": round(p.lon, 7),
-                "ground_m": _r(p.ground_m), "effective_m": _r(p.effective_m), "los_m": _r(p.los_m),
-                "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
-                "r60_bottom_m": _r(p.los_m - CLEAR_RATIO * p.r1_m),
-                "clearance": None if p.clearance is None else round(p.clearance, 3),
-            } for p in self.profile],
+            "profile": [_point_dict(p) for p in self.profile],
+            "profile_a": [_point_dict(p) for p in self.profile_a],
+            "profile_b": [_point_dict(p) for p in self.profile_b],
+            "end_window_m": _r(self.end_window_m),
             "warnings": self.warnings,
         }
 
 
 def _r(value, digits: int = 2):
     return None if value is None else round(value, digits)
+
+
+def _point_dict(p: ProfilePoint) -> dict:
+    return {
+        "d_m": _r(p.d_m), "lat": round(p.lat, 7), "lon": round(p.lon, 7),
+        "ground_m": _r(p.ground_m), "effective_m": _r(p.effective_m), "los_m": _r(p.los_m),
+        "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
+        "r60_bottom_m": _r(p.los_m - CLEAR_RATIO * p.r1_m),
+        "clearance": None if p.clearance is None else round(p.clearance, 3),
+    }
+
+
+def end_window_points(site_a: Site, site_b: Site, distance: float, bearing_ab: float, bearing_ba: float,
+                      window: float, samples: int = END_SAMPLES) -> tuple[list[geo.PathPoint], list[geo.PathPoint]]:
+    """Closely spaced path points over the first and last `window` metres, each in path order."""
+    near_a, near_b = [], []
+    for i in range(samples + 1):
+        d = window * i / samples
+        lat, lon, brg = geo.forward(site_a.lat, site_a.lon, bearing_ab, d) if d else (site_a.lat, site_a.lon,
+                                                                                         bearing_ab)
+        near_a.append(geo.PathPoint(d / distance, lat, geo.normalize_lon(lon), brg))
+        lat, lon, brg = geo.forward(site_b.lat, site_b.lon, bearing_ba, d) if d else (site_b.lat, site_b.lon,
+                                                                                         bearing_ba)
+        near_b.append(geo.PathPoint(1 - d / distance, lat, geo.normalize_lon(lon), (brg + 180) % 360))
+    near_b.reverse()
+    return near_a, near_b
 
 
 def _finite(value) -> bool:
@@ -264,9 +299,12 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
 
     profile_pts = geo.path_points(site_a.lat, site_a.lon, site_b.lat, site_b.lon,
                                   terrain_station_count(distance, n_mesh)) if terrain else []
+    window = min(END_WINDOW_M, distance / 2)
+    end_a_pts, end_b_pts = (end_window_points(site_a, site_b, distance, bearing_ab, bearing_ba, window)
+                            if terrain else ([], []))
     lookup_pts: list[tuple[float, float]] = []
     if terrain:
-        lookup_pts = [(p.lat, p.lon) for p in profile_pts]
+        lookup_pts = [(p.lat, p.lon) for p in profile_pts + end_a_pts + end_b_pts]
     else:
         lookup_pts = [(s.lat, s.lon) for s, need in zip((site_a, site_b), needs_ground) if need]
 
@@ -291,7 +329,10 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
             warnings.append(f"{count} point(s) returned no elevation (open water?); treated as 0 m.")
 
     if terrain:
-        site_lookup = [looked_up[0], looked_up[-1]]
+        main_found = looked_up[:len(profile_pts)]
+        end_a_found = looked_up[len(profile_pts):len(profile_pts) + len(end_a_pts)]
+        end_b_found = looked_up[len(profile_pts) + len(end_a_pts):]
+        site_lookup = [main_found[0], main_found[-1]]
     else:
         it = iter(looked_up)
         site_lookup = [next(it) if need else None for need in needs_ground]
@@ -339,10 +380,9 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
 
     if terrain:
         report.terrain_checked = True
-        min_c = None
-        min_d = None
-        min_gap = None
-        for p, found in zip(profile_pts, looked_up):
+        report.end_window_m = window
+
+        def sample(p: geo.PathPoint, found: ElevationResult) -> ProfilePoint:
             d1 = p.t * distance
             d2 = distance - d1
             bulge = fresnel.earth_bulge(d1, d2, opt.k)
@@ -350,10 +390,17 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
             los = (1 - p.t) * ra.asl_m + p.t * rb.asl_m
             r1 = fresnel.zone_radius(d1, d2, lam, 1)
             c = (los - effective) / r1 if r1 >= MIN_R1_FOR_CLEARANCE else None
-            report.profile.append(ProfilePoint(p.t, d1, p.lat, p.lon, found.elevation, bulge, effective,
-                                               los, r1, c))
-            if c is not None and (min_c is None or c < min_c):
-                min_c, min_d, min_gap = c, d1, los - effective
+            return ProfilePoint(p.t, d1, p.lat, p.lon, found.elevation, bulge, effective, los, r1, c)
+
+        report.profile = [sample(p, f) for p, f in zip(profile_pts, main_found)]
+        report.profile_a = [sample(p, f) for p, f in zip(end_a_pts, end_a_found)]
+        report.profile_b = [sample(p, f) for p, f in zip(end_b_pts, end_b_found)]
+        min_c = None
+        min_d = None
+        min_gap = None
+        for p in report.all_samples:
+            if p.clearance is not None and (min_c is None or p.clearance < min_c):
+                min_c, min_d, min_gap = p.clearance, p.d_m, p.los_m - p.effective_m
         report.min_clearance = min_c
         report.min_clearance_d_m = min_d
         report.min_clearance_m = min_gap

@@ -50,6 +50,37 @@ def test_terrain_station_count(fake_chain):
     assert len(long.profile) == 402  # ceil(100 km / 250 m) + 1
 
 
+def test_close_up_windows_next_to_each_tower(fake_chain):
+    r = flat_link(10, fake_chain)
+    window = 500 * 0.3048
+    assert r.end_window_m == pytest.approx(window)
+    for pts, start in ((r.profile_a, 0.0), (r.profile_b, r.distance_m - window)):
+        assert len(pts) == 26
+        ds = [p.d_m for p in pts]
+        assert ds == sorted(ds)
+        assert ds[0] == pytest.approx(start, abs=1e-6)
+        assert ds[-1] - ds[0] == pytest.approx(window, abs=1e-6)
+        for p in pts:
+            assert geo.inverse(0.0, 0.0, p.lat, p.lon)[0] == pytest.approx(p.d_m, abs=0.05)
+    assert r.profile_b[-1].d_m == pytest.approx(r.distance_m)
+
+
+def test_close_up_catches_obstacle_between_main_samples(fake_chain):
+    # a 30 m wide ridge 100 m from A falls between the main profile's 156 m spacing
+    chain, _ = fake_chain(lambda lat, lon: 25.0 if 0.0008 < lon < 0.00108 else 0.0)
+    r = analyze(Site("A", 0, 0, agl_m=10), Site("B", 0, TEN_KM_LON, agl_m=10), elevation=chain)
+    assert not any(p.ground_m for p in r.profile)
+    assert any(p.ground_m for p in r.profile_a)
+    assert r.status == "BLOCKED"
+    assert r.min_clearance_d_m < 200
+
+
+def test_close_up_window_shrinks_on_short_links(fake_chain):
+    chain, _ = fake_chain()
+    r = analyze(Site("A", 0, 0, agl_m=10), Site("B", 0, 0.002, agl_m=10), elevation=chain)
+    assert r.end_window_m == pytest.approx(r.distance_m / 2)
+
+
 def test_report_dict_is_json_ready(fake_chain):
     import json
     r = flat_link(10, fake_chain)
@@ -58,6 +89,8 @@ def test_report_dict_is_json_ready(fake_chain):
     assert data["sites"][0]["display"] == "0.0000000, 0.0000000"
     assert data["profile"][32]["zone_bottom_m"] == pytest.approx(10 - 11.37, abs=0.05)
     assert data["zone_color"]["random"] is True
+    assert len(data["profile_a"]) == len(data["profile_b"]) == 26
+    assert data["end_window_m"] == pytest.approx(152.4)
 
 
 def test_coord_display_in_report():

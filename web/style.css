@@ -78,20 +78,27 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .swatch-box { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
 #swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); display: inline-block; }
 .warnings { color: var(--marginal); font-size: 0.88rem; padding-left: 20px; }
-#profile { width: 100%; height: auto; background: #fbfcfd; border: 1px solid var(--line); border-radius: 6px; }
-#profile .ground { fill: #d8c9a8; stroke: #8a6d3b; stroke-width: 1; }
-#profile .los { stroke: #c9a000; stroke-width: 2; fill: none; }
-#profile .zone { stroke: #2b8a3e; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
-#profile .r60 { stroke: #e8590c; stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; }
-#profile .obstruction { fill: var(--blocked); }
-#profile .axis { stroke: var(--line); }
-#profile text { font-size: 11px; fill: var(--muted); }
+.plot-title { margin: 14px 0 4px; font-size: 0.92rem; font-weight: 600; }
+.profile-plot { display: block; width: 100%; height: auto; background: #fbfcfd; border: 1px solid var(--line); border-radius: 6px; }
+.profile-plot .ground { fill: #d8c9a8; stroke: #8a6d3b; stroke-width: 1; }
+.profile-plot .los { stroke: #c9a000; stroke-width: 2; fill: none; }
+.profile-plot .zone { stroke: #2b8a3e; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+.profile-plot .r60 { stroke: #e8590c; stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; }
+.profile-plot .obstruction { fill: var(--blocked); }
+.profile-plot .axis { stroke: var(--line); }
+.profile-plot text { font-size: 11px; fill: var(--muted); }
+.profile-plot .mast { stroke: #1d232b; stroke-width: 3; }
+.profile-plot .mast-top { fill: #1d232b; }
+.profile-plot text.site-label { font-size: 12px; font-weight: 600; fill: var(--ink); }
+.profile-plot text.offsite { font-size: 12px; fill: var(--ink); }
 .legend { font-size: 0.8rem; color: var(--muted); display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; }
 .lg { display: inline-block; width: 18px; height: 3px; margin-right: 4px; vertical-align: middle; }
 .lg.ground { background: #8a6d3b; }
 .lg.los { background: #c9a000; }
 .lg.zone { background: #2b8a3e; }
 .lg.r60 { background: #e8590c; }
+.lg.mast { background: #1d232b; width: 4px; height: 14px; }
+.lg-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blocked); margin-right: 4px; }
 
 .api-doc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px 16px 12px; margin-bottom: 24px; }
 .api-doc pre { background: #f0f2f5; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 0.82rem; }
