@@ -80,7 +80,7 @@ With no config file, the server looks up ground elevation from the public OpenTo
 
 ## 5. Optional: map tile servers
 
-The page's map is drawn with Leaflet, which ships inside the folder (`vendor/leaflet/`, BSD 2-Clause licence). The map tiles come from the tile servers listed under `map` in the same `/etc/fresnelkml/config.json`. Without a `map` section, the page offers OpenStreetMap (the default) and OpenTopoMap. To use your own or an AREDN tileserver, list it, and make it the default if you like:
+The page's map is drawn with Leaflet, which ships inside the folder (`assets/leaflet/`, BSD 2-Clause licence). If your NGINX config denies paths such as `/assets/`, allow them for this folder, or the map won't load. The map tiles come from the tile servers listed under `map` in the same `/etc/fresnelkml/config.json`. Without a `map` section, the page offers OpenStreetMap (the default) and OpenTopoMap. To use your own or an AREDN tileserver, list it, and make it the default if you like:
 
 ```json
 "map": {

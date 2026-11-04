@@ -49,7 +49,7 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 
 ### Map
 
-The results include a top-down map (Leaflet, bundled in `web/vendor/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. See [deploy/INSTALL.md](deploy/INSTALL.md).
+The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. See [deploy/INSTALL.md](deploy/INSTALL.md).
 
 ### Elevation sources
 
