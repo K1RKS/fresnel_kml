@@ -15,6 +15,7 @@ from .config import ConfigError, load_config
 from .coords import LAT, LON, CoordinateError, format_position, parse_coordinate, parse_position
 from .elevation import ElevationUnavailable
 from .kml import render_kml
+from .nodes import load_nodes
 from .parsing import RequestError, parse_request
 
 MAX_BODY = 16 * 1024
@@ -34,6 +35,7 @@ USAGE = {
     "endpoints": {
         "GET ?sources": "list the configured elevation sources",
         "GET ?map": "list the configured map tile servers",
+        "GET ?nodes": "list mesh nodes from the configured Nodographer feeds",
         "GET ?parse=TEXT[&axis=lat|lon]": "decode a coordinate or position to decimal degrees",
     },
 }
@@ -71,11 +73,16 @@ def safe_filename(a: str, b: str) -> str:
 
 def _get(query: str, env) -> Response:
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
-    if "sources" in params or "map" in params:
+    if "sources" in params or "map" in params or "nodes" in params:
         try:
             cfg = load_config(env=env)
         except ConfigError as exc:
             return _error(500, f"Server configuration error: {exc}")
+        if "nodes" in params:
+            nodes, feeds, warnings = load_nodes(cfg)
+            body = json.dumps({"feeds": feeds, "nodes": nodes, "warnings": warnings}, ensure_ascii=False,
+                              separators=(",", ":")).encode("utf-8")
+            return Response(200, body, [("Content-Type", JSON_TYPE), ("Cache-Control", "max-age=60")])
         if "map" in params:
             return _json(200, cfg.public_map())
         return _json(200, {"sources": [{"name": "auto", "type": "chain"}] + cfg.public_sources()})

@@ -4,28 +4,28 @@ overview: Let the web page fill Site A and Site B from Nodographer's nodes.json 
 todos:
   - id: config
     content: "config.py: add a `nodes` section (feeds list of {name, url}, cache_ttl_s, timeout_s) with validation, defaults and a public_nodes() view"
-    status: pending
+    status: completed
   - id: nodes-module
     content: "New fresnelkml/nodes.py: fetch each feed, slim Nodographer JSON to the picker fields, merge feeds, file cache with TTL and stale fallback"
-    status: pending
+    status: completed
   - id: api
     content: "webapi.py: GET ?nodes returns {feeds, nodes, warnings}; never 5xx for an unreachable feed; add to USAGE"
-    status: pending
+    status: completed
   - id: ui-picker
     content: "index.html/app.js/style.css: per-site Mesh node type-ahead (keyboard navigable), fill rules, RF-neighbour suggestions for the other site, hidden when no feeds"
-    status: pending
+    status: completed
   - id: ui-aim
     content: "app.js: Antenna aim summary row comparing picked nodes' azimuth with the link bearings, flagged when outside half the beamwidth"
-    status: pending
+    status: completed
   - id: tests
     content: "tests/test_nodes.py and test_api additions: slimming (new and old feed shapes), merge, cache/stale, config errors, ?nodes endpoint with mocked fetch"
-    status: pending
+    status: completed
   - id: docs
     content: "README, deploy/INSTALL.md, deploy/config.example.json: document the nodes feed config, ?nodes endpoint and the picker"
-    status: pending
+    status: completed
   - id: verify
     content: Run pytest, then dev_server against a sample feed file and the live feed; check picking, unit conversion, neighbours and aim row in a browser
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -72,7 +72,7 @@ New optional top-level section, mirrored in `DEFAULT_CONFIG`:
   ```
   - `name`: `node` with a trailing `.local.mesh` removed. `id`: the feed's `id`, else the lowercase name (older feeds have no `id`).
   - Antenna fields come from `antenna` when present, else `null`. Numbers go through a `_num` helper (rejects `None`, `""`, `"None"`, `"Not Available"`, non-finite). `freq_mhz` of `0` becomes `null`.
-  - `links`: keep entries with an `id` or `hostname`; `type` from `linkType`.
+  - `links`: keep only RF entries (`linkType` `RF`) with an `id` or `hostname`; `type` from `linkType`. Tunnel and DTD links can't be a Fresnel path, and dropping them halves the live response (about 104 KB for 315 nodes).
 - `load_nodes(config, env=None, now=time.time) -> tuple[list[dict], list[dict], list[str]]`: returns `(nodes, feeds, warnings)`. For each feed: use the cache when younger than the TTL, else fetch with `httpjson.get_json` and rewrite the cache atomically (temp file + `os.replace`). On fetch failure, use the stale cache with a warning such as "K1RKS MeshMap: feed unreachable, showing data from 14 min ago", or skip the feed with a warning when there is no cache. A response without a `nodeInfo` list counts as a failure.
 - Merging: feeds in config order; a duplicate `id` keeps the first feed's node. Sort by `name`, case-insensitive.
 - `feeds` entries in the response: `{"name", "generated": <feed "date" in ms or null>, "count", "age_s"}`. The feed URL is not echoed, only the name.
@@ -101,6 +101,8 @@ New optional top-level section, mirrored in `DEFAULT_CONFIG`:
 - Filters by case-insensitive substring on `name`, up to 20 matches, prefix matches first.
 - Each row shows the name, plus `Ht 25 m · 5805 MHz` when known.
 - Arrow keys, Enter and Escape work, and so does a mouse click. The list closes on blur.
+- The matching part of each name is bold.
+- Inline completion: the rest of the first name that starts with the typed text is added to the box, selected, so typing continues over it. Tab or Enter accepts it. Arrow keys move the completion to the highlighted row. Backspace doesn't re-add it. Escape and blur drop it.
 - When the other site holds a picked node, its RF neighbours come first under a heading "RF links of <name>", with `distance` (shown with `dfmt`) and bearing. They show even while the box is empty, on focus.
 
 **Fill rules (`fillSite(fs, node)`):**
@@ -108,7 +110,7 @@ New optional top-level section, mirrored in `DEFAULT_CONFIG`:
 - Switch to the latitude/longitude mode if the single-position box is showing. Latitude and longitude ← values with 7 decimals. Clear `.decoded`.
 - When `height_m` is known: height ← `height_m`, converted to feet when `#units` is `ft` (`/ 0.3048`, one decimal); height reference ← `agl`; ground override cleared; `updateLookupHint()`. When it's unknown, leave the height and show "No antenna height in the feed; enter it." in `.decoded`.
 - When `freq_mhz` is known: `#freq_ghz` ← `freq_mhz / 1000` rounded to 4 decimals. If the other picked site has a different known frequency, show "The two nodes report different frequencies (5805 vs 5745 MHz)." in the hint and keep the latest pick.
-- Remember the pick in `fs.dataset.nodeId`. Any manual edit to name, latitude, longitude, position or height clears it, so manual edits are never overwritten.
+- Remember the pick in `fs.dataset.nodeId`. A manual edit to latitude, longitude or position (or switching the position mode) clears it. Renaming the site keeps it. A manual height edit keeps the pick but stops the height refill, so manual edits are never overwritten.
 - When `#units` changes and a site still holds an unedited pick, refill its height in the new unit. Manual heights keep today's behaviour: the number stays and only the label changes.
 
 **Antenna aim (`ui-aim`):** in `showResult`, for each site that still holds a pick with a known `azimuth_deg`:

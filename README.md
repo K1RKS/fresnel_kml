@@ -46,6 +46,13 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Options** (all optional): `freq_ghz`, `zone`, `sixty`, `k`, `clutter_m`, `elev_source`, `stations`, `ring_points`, `style` (`mesh`/`rings`), `ring_every`, `terrain_check` (`true`/`false`/`null` = only when a lookup is needed anyway), `mode` (`absolute`/`relative`), `units` (`m`/`ft`), `color` (`random`, `#RRGGBB`, `#RRGGBBAA` or a name), `coord_display` (`decimal`/`dms`/`ddm`).
 - **Response**: the KML file as a download, or `{"kml", "report", "warnings"}` with `"format": "json"`. Errors are JSON `{"error", "field"}` with status 400, 405, 413, 502 (no elevation available) or 504.
 - `GET ?sources` lists the configured elevation sources; `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
+- `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
+
+### Mesh node picker
+
+When the server has a Nodographer feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), each site gets a "Mesh node" box. As you type, matching nodes are listed with the match in bold, and the first name that starts with what you typed is completed in the box; Tab or Enter accepts it, and the arrow keys or the mouse pick another. Picking a node fills the name, position, antenna height above ground and the link frequency. Once one site is picked, the other site's list starts with that node's RF links, nearest first. Editing the position by hand drops the pick; editing the height keeps the pick but stops it refilling the height when the units change.
+
+For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
 ### Map
 

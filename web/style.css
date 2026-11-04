@@ -46,6 +46,20 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .decoded { font-size: 0.82rem; color: var(--muted); min-height: 1.2em; margin-top: 4px; }
 .decoded.bad { color: var(--blocked); }
 .hint { font-size: 0.85rem; color: var(--muted); margin: 8px 0 0; }
+.hint .warn { color: var(--marginal); display: block; }
+
+.node-pick { position: relative; }
+.node-list {
+  position: absolute; z-index: 1000; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 4px 0;
+  list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); max-height: 280px; overflow-y: auto; font-size: 0.88rem;
+}
+.node-list li { padding: 5px 10px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
+.node-list li small { color: var(--muted); white-space: nowrap; }
+.node-list li.active { background: #eaf2ff; }
+.node-list li.group { cursor: default; color: var(--muted); font-size: 0.78rem; font-weight: 600; padding-top: 6px; }
+.node-list li.empty { cursor: default; color: var(--muted); }
+.aim-off { color: var(--marginal); font-weight: 600; }
 
 .linkish {
   background: none; border: none; color: var(--accent); padding: 0; margin-top: 6px;

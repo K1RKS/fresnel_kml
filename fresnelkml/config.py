@@ -40,6 +40,12 @@ DEFAULT_CONFIG = {
         ],
         "default": "OpenStreetMap",
     },
+    "nodes": {
+        "feeds": [
+            {"name": "K1RKS MeshMap", "url": "https://meshmap.k1rks.me/meshmap/data/nodes.json"},
+        ],
+        "cache_ttl_s": 300,
+    },
 }
 
 SOURCE_TYPES = ("opentopodata", "open-elevation", "usgs", "google", "local_hgt")
@@ -58,6 +64,9 @@ class Config:
     path: str | None = None
     tile_servers: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["map"]["tile_servers"]))
     default_tile_server: str | None = DEFAULT_CONFIG["map"]["default"]
+    node_feeds: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["nodes"]["feeds"]))
+    nodes_cache_ttl_s: float = DEFAULT_CONFIG["nodes"]["cache_ttl_s"]
+    nodes_timeout_s: float | None = None
 
     def source_names(self) -> list[str]:
         return [s["name"] for s in self.chain]
@@ -119,6 +128,48 @@ def _parse_map(data) -> tuple[list[dict], str | None]:
     return servers, (default if servers else None)
 
 
+_NODES_KEYS = {"feeds", "cache_ttl_s", "timeout_s"}
+_FEED_KEYS = {"name", "url"}
+
+
+def _parse_nodes(data) -> tuple[list[dict], float, float | None]:
+    if data is None:
+        default = DEFAULT_CONFIG["nodes"]
+        return copy.deepcopy(default["feeds"]), float(default["cache_ttl_s"]), None
+    if not isinstance(data, dict):
+        raise ConfigError("'nodes' must be an object")
+    unknown = set(data) - _NODES_KEYS
+    if unknown:
+        raise ConfigError(f"nodes has unknown key(s): {', '.join(sorted(unknown))}")
+    feeds_raw = data.get("feeds", DEFAULT_CONFIG["nodes"]["feeds"])
+    if not isinstance(feeds_raw, list):
+        raise ConfigError("nodes.feeds must be a list")
+    feeds = []
+    for i, entry in enumerate(feeds_raw):
+        where = f"nodes.feeds[{i}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{where} must be an object")
+        unknown = set(entry) - _FEED_KEYS
+        if unknown:
+            raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")
+        name, url = entry.get("name"), entry.get("url")
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"{where}.name must be a non-empty string")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"{where}.url must be an http(s) URL")
+        feeds.append({"name": name, "url": url})
+    names = [f["name"] for f in feeds]
+    if len(set(names)) != len(names):
+        raise ConfigError("node feed names must be unique")
+    ttl = data.get("cache_ttl_s", DEFAULT_CONFIG["nodes"]["cache_ttl_s"])
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or ttl < 0:
+        raise ConfigError("nodes.cache_ttl_s must be a non-negative number")
+    timeout = data.get("timeout_s")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
+        raise ConfigError("nodes.timeout_s must be a positive number")
+    return feeds, float(ttl), (float(timeout) if timeout is not None else None)
+
+
 def _validate_source(entry, index: int) -> dict:
     if not isinstance(entry, dict):
         raise ConfigError(f"elevation.chain[{index}] must be an object")
@@ -164,7 +215,9 @@ def parse_config(data: dict, path: str | None = None) -> Config:
     if cache_dir is not None and not isinstance(cache_dir, str):
         raise ConfigError("elevation.cache_dir must be a string or null")
     tile_servers, default_tiles = _parse_map(data.get("map"))
-    return Config(chain, float(timeout), retries, cache_dir, path, tile_servers, default_tiles)
+    feeds, nodes_ttl, nodes_timeout = _parse_nodes(data.get("nodes"))
+    return Config(chain, float(timeout), retries, cache_dir, path, tile_servers, default_tiles,
+                  feeds, nodes_ttl, nodes_timeout)
 
 
 def load_config(path: str | None = None, env=None) -> Config:

@@ -24,5 +24,11 @@
        "attribution": "&copy; OpenStreetMap contributors", "max_zoom": 19}
     ],
     "default": "OpenStreetMap"
+  },
+  "nodes": {
+    "feeds": [
+      {"name": "K1RKS MeshMap", "url": "https://meshmap.k1rks.me/meshmap/data/nodes.json"}
+    ],
+    "cache_ttl_s": 300
   }
 }

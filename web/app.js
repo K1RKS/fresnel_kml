@@ -142,7 +142,263 @@ function updateLookupHint() {
   if (!lookup && !terrain) text = "No elevation lookup will be made.";
   else if (terrain) text = "Ground elevations along the path will be looked up for the terrain check.";
   else text = "Ground elevation will be looked up for the tower site(s) given above ground.";
-  $("#lookup-hint").textContent = text;
+  const notes = [...nodeWarnings];
+  const [pa, pb] = [pickedNode("site_a"), pickedNode("site_b")];
+  if (pa && pb && pa.freq_mhz && pb.freq_mhz && pa.freq_mhz !== pb.freq_mhz) {
+    notes.push(`The two nodes report different frequencies (${pa.freq_mhz} vs ${pb.freq_mhz} MHz).`);
+  }
+  $("#lookup-hint").innerHTML = esc(text) + notes.map((n) => `<span class="warn">${esc(n)}</span>`).join("");
+}
+
+// ----- Mesh node picker (Nodographer feeds via GET ?nodes) -----
+
+let meshNodes = [];
+const nodeById = new Map();
+let nodeWarnings = [];
+const MAX_MATCHES = 20;
+
+function otherKey(key) {
+  return key === "site_a" ? "site_b" : "site_a";
+}
+
+function pickedNode(key) {
+  const id = siteFieldset(key).dataset.nodeId;
+  return id ? nodeById.get(id) || null : null;
+}
+
+function clearPick(fs) {
+  if (!fs.dataset.nodeId) return;
+  delete fs.dataset.nodeId;
+  delete fs.dataset.heightAuto;
+  $("input[name=node_search]", fs).value = "";
+  updateLookupHint();
+}
+
+function setPickedHeight(fs, node) {
+  const units = $("#units").value;
+  const value = units === "ft" ? node.height_m / FEET : node.height_m;
+  $("input[name=height]", fs).value = String(Number(value.toFixed(1)));
+}
+
+function fillSite(fs, node) {
+  if (usesSinglePosition(fs)) $(".toggle-pos", fs).click();
+  const nameIn = $("input[name=name]", fs);
+  nameIn.value = node.name;
+  nameIn.dispatchEvent(new Event("input"));
+  for (const axis of ["lat", "lon"]) {
+    const input = $(`input[name=${axis}]`, fs);
+    input.value = node[axis].toFixed(7);
+    input.classList.remove("invalid");
+  }
+  const hasHeight = node.height_m !== null && node.height_m !== undefined;
+  if (hasHeight) {
+    setPickedHeight(fs, node);
+    $("input[name=height]", fs).classList.remove("invalid");
+    $("input[name=ground]", fs).value = "";
+    const ref = $("select[name=height_ref]", fs);
+    ref.value = "agl";
+    ref.dispatchEvent(new Event("change"));
+  }
+  if (node.freq_mhz) $("#freq_ghz").value = String(Number((node.freq_mhz / 1000).toFixed(4)));
+  const out = $(".decoded", fs);
+  out.classList.remove("bad");
+  out.textContent = `From mesh node ${node.name}${node.antenna ? ` (${node.antenna})` : ""}.`
+    + (hasHeight ? "" : " No antenna height in the feed; enter it.");
+  fs.dataset.nodeId = node.id;
+  if (hasHeight) fs.dataset.heightAuto = "1";
+  else delete fs.dataset.heightAuto;
+  $("input[name=node_search]", fs).value = node.name;
+  updateLookupHint();
+}
+
+function nodeExtra(node) {
+  const units = $("#units").value;
+  const parts = [];
+  if (node.height_m !== null && node.height_m !== undefined) parts.push(`Ht ${hfmt(node.height_m, 0, units)}`);
+  if (node.freq_mhz) parts.push(`${node.freq_mhz} MHz`);
+  return parts.join(" \u00b7 ");
+}
+
+// Rows for the dropdown: the other site's RF links first, then name matches.
+function suggestions(key, query) {
+  const q = query.trim().toLowerCase();
+  const other = pickedNode(otherKey(key));
+  const self = pickedNode(key);
+  const rows = [];
+  const shown = new Set(self ? [self.id] : []);
+  if (other) {
+    const units = $("#units").value;
+    const near = other.links
+      .filter((l) => l.type === "RF" && nodeById.has(l.id) && l.id !== other.id && !shown.has(l.id))
+      .map((l) => ({ node: nodeById.get(l.id), link: l }))
+      .filter(({ node }) => !q || node.name.toLowerCase().includes(q))
+      .sort((x, y) => (x.link.distance_km ?? Infinity) - (y.link.distance_km ?? Infinity));
+    if (near.length) {
+      rows.push({ group: `RF links of ${other.name}` });
+      for (const { node, link } of near) {
+        const where = [link.distance_km !== null ? dfmt(link.distance_km * 1000, 1, units) : null,
+          link.bearing_deg !== null ? `${link.bearing_deg.toFixed(0)}\u00b0` : null].filter(Boolean).join(", ");
+        rows.push({ node, extra: [where, nodeExtra(node)].filter(Boolean).join(" \u00b7 ") });
+        shown.add(node.id);
+      }
+    }
+  }
+  if (q) {
+    const matches = meshNodes.filter((n) => !shown.has(n.id) && n.name.toLowerCase().includes(q));
+    matches.sort((x, y) => Number(!x.name.toLowerCase().startsWith(q)) - Number(!y.name.toLowerCase().startsWith(q)));
+    if (rows.length && matches.length) rows.push({ group: "All nodes" });
+    for (const node of matches.slice(0, MAX_MATCHES)) rows.push({ node, extra: nodeExtra(node) });
+    if (!matches.length && !rows.length) rows.push({ empty: "No matching node" });
+  }
+  return rows;
+}
+
+function markMatch(name, q) {
+  const at = q ? name.toLowerCase().indexOf(q) : -1;
+  if (at < 0) return esc(name);
+  return esc(name.slice(0, at)) + `<b>${esc(name.slice(at, at + q.length))}</b>` + esc(name.slice(at + q.length));
+}
+
+function setupPicker(key) {
+  const fs = siteFieldset(key);
+  const input = $("input[name=node_search]", fs);
+  const list = $(".node-list", fs);
+  let rows = [];
+  let active = -1;
+  let typed = "";  // what the user typed, without the inline completion
+
+  const completing = () => input.selectionStart === typed.length && input.selectionEnd > typed.length;
+  // Show the rest of the active row's name, selected, so typing over it keeps filtering.
+  const complete = () => {
+    const row = rows[active];
+    const q = typed.trim().toLowerCase();
+    if (q && row && row.node && row.node.name.toLowerCase().startsWith(typed.toLowerCase())) {
+      input.value = typed + row.node.name.slice(typed.length);
+      input.setSelectionRange(typed.length, input.value.length);
+    } else if (input.value !== typed) {
+      input.value = typed;
+    }
+  };
+  const close = () => {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    active = -1;
+  };
+  const highlight = () => {
+    $$("li", list).forEach((li) => {
+      const on = Number(li.dataset.index) === active;
+      li.classList.toggle("active", on);
+      li.setAttribute("aria-selected", on ? "true" : "false");
+      if (on) li.scrollIntoView({ block: "nearest" });
+    });
+  };
+  const open = (autocomplete = false) => {
+    rows = suggestions(key, typed);
+    const q = typed.trim().toLowerCase();
+    const prefix = q ? rows.findIndex((r) => r.node && r.node.name.toLowerCase().startsWith(typed.toLowerCase())) : -1;
+    active = prefix >= 0 ? prefix : rows.findIndex((r) => r.node);
+    if (!rows.length) return close();
+    list.innerHTML = rows.map((r, i) => {
+      if (r.group) return `<li class="group" role="presentation">${esc(r.group)}</li>`;
+      if (r.empty) return `<li class="empty" role="presentation">${esc(r.empty)}</li>`;
+      return `<li role="option" data-index="${i}"><span>${markMatch(r.node.name, q)}</span><small>${esc(r.extra)}</small></li>`;
+    }).join("");
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    highlight();
+    if (autocomplete && prefix >= 0) complete();
+  };
+  const choose = (i) => {
+    const row = rows[i];
+    if (!row || !row.node) return;
+    close();
+    fillSite(fs, row.node);
+    typed = input.value;
+  };
+  const step = (dir) => {
+    const idx = rows.map((r, i) => (r.node ? i : -1)).filter((i) => i >= 0);
+    if (!idx.length) return;
+    const pos = idx.indexOf(active);
+    active = idx[(pos + dir + idx.length) % idx.length];
+    highlight();
+    complete();
+  };
+
+  input.addEventListener("input", (ev) => {
+    typed = input.value;
+    // Deleting must not re-add the completion the user just removed
+    open(!(ev.inputType || "").startsWith("delete"));
+  });
+  input.addEventListener("focus", () => { typed = input.value; open(); });
+  input.addEventListener("click", () => { if (list.hidden) { typed = input.value; open(); } });
+  input.addEventListener("blur", () => {
+    if (completing()) input.value = typed;
+    setTimeout(close, 150);
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (list.hidden) open();
+      else step(ev.key === "ArrowDown" ? 1 : -1);
+    } else if (ev.key === "Enter" || (ev.key === "Tab" && !ev.shiftKey && completing())) {
+      if (!list.hidden && active >= 0) {
+        ev.preventDefault();
+        choose(active);
+      }
+    } else if (ev.key === "Escape") {
+      if (completing()) input.value = typed;
+      close();
+    }
+  });
+  list.addEventListener("mousedown", (ev) => {
+    const li = ev.target.closest("li[data-index]");
+    if (!li) return;
+    ev.preventDefault();
+    choose(Number(li.dataset.index));
+  });
+
+  for (const name of ["lat", "lon", "position"]) {
+    const field = $(`input[name=${name}]`, fs);
+    field.addEventListener("input", () => clearPick(fs));
+    field.addEventListener("paste", () => clearPick(fs));
+  }
+  $(".toggle-pos", fs).addEventListener("click", (ev) => { if (ev.isTrusted) clearPick(fs); });
+  $("input[name=height]", fs).addEventListener("input", () => { delete fs.dataset.heightAuto; });
+  $("select[name=height_ref]", fs).addEventListener("change", (ev) => { if (ev.isTrusted) delete fs.dataset.heightAuto; });
+}
+
+async function loadNodes() {
+  let data;
+  try {
+    const resp = await fetch(`${API}?nodes`);
+    if (!resp.ok) return;
+    data = await resp.json();
+  } catch (err) {
+    return;  /* no feeds: the pickers stay hidden */
+  }
+  meshNodes = data.nodes || [];
+  meshNodes.forEach((n) => nodeById.set(n.id, n));
+  nodeWarnings = data.warnings || [];
+  if (meshNodes.length) $$(".node-pick").forEach((el) => { el.hidden = false; });
+  updateLookupHint();
+}
+
+// How far each picked node's antenna azimuth is from the bearing to the other site.
+function aimRow(r, picks) {
+  const lines = [];
+  const bearings = [r.bearing_ab, r.bearing_ba];
+  r.sites.forEach((s, i) => {
+    const node = picks[i];
+    if (!node || node.azimuth_deg === null || node.azimuth_deg === undefined) return;
+    const off = Math.abs(((node.azimuth_deg - bearings[i] + 540) % 360) - 180);
+    const bw = node.beamwidth_deg;
+    const narrow = bw !== null && bw !== undefined && bw > 0 && bw < 360;
+    let text = `${esc(s.name)} aims ${Number(node.azimuth_deg.toFixed(1))}\u00b0, link ${bearings[i].toFixed(1)}\u00b0 `
+      + `(${off.toFixed(1)}\u00b0 off${narrow ? `, beamwidth ${Number(bw.toFixed(1))}\u00b0` : ""})`;
+    if (narrow && off > bw / 2) text = `<span class="aim-off">${text}, outside the beam</span>`;
+    lines.push(text);
+  });
+  return lines.length ? ["Antenna aim", lines.join("<br>")] : null;
 }
 
 function readSite(key) {
@@ -217,17 +473,17 @@ const FEET = 0.3048;
 let resultUnits = "m";
 
 // The API always reports metres; show heights in the units the request used.
-function hfmt(metres, digits = 1) {
+function hfmt(metres, digits = 1, units = resultUnits) {
   if (metres === null || metres === undefined) return "unknown";
-  const value = resultUnits === "ft" ? metres / FEET : metres;
-  return `${value.toFixed(digits)} ${resultUnits}`;
+  const value = units === "ft" ? metres / FEET : metres;
+  return `${value.toFixed(digits)} ${units}`;
 }
 
 const MILE = 1609.344;
 
 // Short distances in m or ft, longer ones in km or miles.
-function dfmt(metres, digits = 3) {
-  if (resultUnits === "ft") {
+function dfmt(metres, digits = 3, units = resultUnits) {
+  if (units === "ft") {
     const feet = metres / FEET;
     return Math.abs(feet) < 1000 ? `${feet.toFixed(0)} ft` : `${(metres / MILE).toFixed(digits)} mi`;
   }
@@ -249,7 +505,7 @@ function esc(text) {
   return d.innerHTML;
 }
 
-function showResult(data, units) {
+function showResult(data, units, picks = []) {
   resultUnits = units === "ft" ? "ft" : "m";
   const r = data.report;
   lastKml = data.kml;
@@ -267,6 +523,8 @@ function showResult(data, units) {
   }
   rows.push(["Distance", dfmt(r.distance_m)]);
   rows.push(["Bearings", `A\u2192B ${r.bearing_ab.toFixed(1)}\u00b0, B\u2192A ${r.bearing_ba.toFixed(1)}\u00b0`]);
+  const aim = aimRow(r, picks);
+  if (aim) rows.push(aim);
   rows.push(["Max r1 / 0.6\u00b7r1", `${hfmt(r.r1_max_m, 2)} / ${hfmt(r.r60_max_m, 2)}`]);
   if (r.zone !== 1) rows.push([`Max r${r.zone}`, hfmt(r.zone_max_m, 2)]);
   if (r.terrain_checked) {
@@ -479,6 +737,7 @@ async function submit(ev) {
   btn.disabled = true;
   $("#busy").hidden = false;
   const request = buildRequest();
+  const picks = [pickedNode("site_a"), pickedNode("site_b")];
   try {
     const resp = await fetch(API, {
       method: "POST",
@@ -495,7 +754,7 @@ async function submit(ev) {
       showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
       return;
     }
-    showResult(data, request.options.units);
+    showResult(data, request.options.units, picks);
   } catch (err) {
     showError(err.message || String(err));
   } finally {
@@ -537,9 +796,17 @@ async function loadSources() {
 
 function init() {
   ["site_a", "site_b"].forEach((k) => setupSite(siteFieldset(k)));
+  ["site_a", "site_b"].forEach(setupPicker);
   $("#color_random").addEventListener("change", (e) => { $("#color").disabled = e.target.checked; });
   $("#terrain_check").addEventListener("change", updateLookupHint);
-  $("#units").addEventListener("change", updateUnitLabels);
+  $("#units").addEventListener("change", () => {
+    updateUnitLabels();
+    for (const key of ["site_a", "site_b"]) {
+      const fs = siteFieldset(key);
+      const node = pickedNode(key);
+      if (node && fs.dataset.heightAuto) setPickedHeight(fs, node);
+    }
+  });
   $("#trees").addEventListener("change", (e) => {
     for (const id of ["#tree_height", "#tree_clearance_a", "#tree_clearance_b"]) $(id).disabled = !e.target.checked;
   });
@@ -557,6 +824,7 @@ function init() {
   updateLookupHint();
   loadSources();
   loadMapConfig();
+  loadNodes();
 }
 
 init();
