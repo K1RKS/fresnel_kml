@@ -69,7 +69,7 @@ For picked nodes that report an antenna azimuth, the result adds an "Antenna aim
 
 ### Map
 
-The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. See [deploy/INSTALL.md](deploy/INSTALL.md).
+The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. Tiles can be cached on your server; see [Local cache](#local-cache) and [deploy/INSTALL.md](deploy/INSTALL.md).
 
 ### Elevation sources
 
@@ -84,6 +84,93 @@ By default the server uses the USGS 3DEP bare-earth image service (lidar-derived
 - **LIDAR**: the highest-hit lidar surface (tree tops, roofs and anything else standing), sampled every 3 m along the path and across the zone: on the line of sight and at ±half and ±all of the lidar width, a fraction of r1 (default 0.6, the 60% zone; 0 checks the line of sight only). Something beside the line of sight counts by its distance from the zone's axis. Where no lidar covers the path, the fixed tree height is used instead and the report says what share of the path had lidar. Lidar is drawn in blue, fixed-height trees in green. Long paths are sampled more coarsely (at most 25,000 points), and lidar that doesn't arrive within the time budget falls back to the fixed height with a warning.
 
 The default lidar source is the Oregon DOGAMI highest-hit surface (3 ft cells, all of Oregon that's been flown, plus some of the Washington side of the Columbia). Other public ArcGIS image services can be added in the `surface` section of the server config; see [deploy/config.example.json](deploy/config.example.json). Washington DNR's lidar services need a login, so they aren't included. When Trees or LIDAR is chosen, the terrain check runs even in "auto" mode.
+
+### Local cache
+
+The server can keep a local copy of everything it looks up from outside services, so a link that has been checked before comes back in a fraction of the time and the public services see fewer requests:
+
+- **Ground elevations** from each elevation source (USGS 3DEP, OpenTopoData, Open-Elevation, USGS point query, Google).
+- **Lidar surface samples** from each lidar source (Oregon DOGAMI by default).
+- **Map tiles** from each tile server you choose (OpenStreetMap, OpenTopoMap), cached by NGINX.
+
+Each service has its own cache with its own size limit, 1 GB by default. When a cache is full, the entries used least recently are removed first.
+
+#### Turning it on
+
+The cache is on whenever `/var/cache/fresnelkml` exists and the web server can write to it. On a Debian or Ubuntu server, create it once:
+
+```bash
+sudo install -d -o www-data -g www-data /var/cache/fresnelkml
+```
+
+Without that folder, or with `"dir": null` in the config, nothing is cached and everything works as before. Elevation and lidar caching need no restart; map tile caching needs the NGINX setup below.
+
+#### Sizes and other settings
+
+Add a `cache` section to `/etc/fresnelkml/config.json` to change the folder or the sizes:
+
+```json
+"cache": {
+  "dir": "/var/cache/fresnelkml",
+  "max_mb": 1024,
+  "types": {"opentopodata": 256},
+  "services": {"3dep": 2048, "dogami": 4096}
+}
+```
+
+- `dir`: where the cache files go. Leave it out to use `/var/cache/fresnelkml` when it's writable; set it to `null` to turn caching off.
+- `max_mb`: the size limit for each service, in MB (default 1024).
+- `types`: a limit for every source of one type, such as `opentopodata` or `arcgis_image`. Lidar sources have the type `surface`.
+- `services`: a limit for one source, by the `name` in `elevation.chain` or `surface.sources`.
+- A service's limit is its entry under `services`, else its type under `types`, else `max_mb`. A limit of `0` means that service isn't cached.
+- The older setting `elevation.cache_dir` still works and means the same as `cache.dir`.
+
+As a guide, 1 GB holds about 25 to 30 million points: roughly 1,000 long lidar links (25,000 samples each) or 50,000 ground profiles.
+
+#### How it's stored
+
+Each service has one SQLite file, `points/<service>.sqlite` in the cache folder, for example `points/3dep.sqlite` and `points/surface-dogami.sqlite`. Python's built-in `sqlite3` is all it needs, so the server still needs no extra packages. Reads and writes stay fast as the cache grows:
+
+- Each point is stored as one compact row, keyed by its position rounded to about 10 cm and packed into a single integer, so a lookup is one B-tree search.
+- A whole path is read with a few batched queries (500 points at a time) and written in one transaction, so even a 25,000-sample lidar link takes only tens of milliseconds to read or save.
+- The files use SQLite's write-ahead log, so many requests can read at once while one writes.
+- When a file passes its limit, the oldest-used points are deleted down to 90% of the limit and the file is trimmed.
+- If a cache file can't be used (locked for too long, damaged, disk full, no permission), the lookup goes to the outside service as usual and the problem is logged; a request never fails because of the cache.
+
+The `elevation.sqlite` file used by earlier versions is no longer read and can be deleted.
+
+#### Map tiles (NGINX)
+
+Map tiles are loaded by the browser, so they're cached by NGINX on the way through, using a separate cache zone, and so a separate size limit, for each tile server. To cache a tile server, give it a `cache_mb` in the config:
+
+```json
+"map": {
+  "tile_servers": [
+    {"name": "OpenStreetMap", "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+     "attribution": "&copy; OpenStreetMap contributors", "max_zoom": 19, "cache_mb": 1024}
+  ]
+}
+```
+
+The page then loads that server's tiles from `tiles/<slug>/...` under the site instead of directly, where the slug is the name in lower case with spaces and punctuation turned into dashes (`tiles/openstreetmap/`, `tiles/aredn-k1rks/`). Print the matching NGINX settings for your site path, add them to the NGINX config, and reload:
+
+```bash
+python3 tools/tile_cache_conf.py --config /etc/fresnelkml/config.json --site /fresnel_kml/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The output has two parts: `proxy_cache_path` lines for the `http { }` block (one zone per cached tile server, with its `max_size`) and `location` blocks for your `server { }` block. Tiles are kept for 7 days, old copies are still served if the tile server is down, and requests carry a proper `User-Agent` as the [OpenStreetMap tile usage policy](https://operations.osmfoundation.org/policies/tiles/) asks. Leave `cache_mb` off for a tile server that only the browser can reach, such as an AREDN `*.local.mesh` tileserver when the web server isn't on the mesh.
+
+#### Checking and maintenance
+
+```bash
+python3 tools/cache_admin.py stats                     # points, size, limit and last use for each service
+python3 tools/cache_admin.py prune                     # apply the size limits now
+python3 tools/cache_admin.py clear --service dogami    # empty one service's cache (or all, without --service)
+curl -sI https://HOST/SITE/tiles/openstreetmap/10/163/357.png | grep X-Cache-Status   # HIT once cached
+```
+
+Run the admin tool as the web server user (`sudo -u www-data ...`) so the files keep the right owner. On the command line, `--cache-dir DIR` uses a cache folder and `--no-cache` turns caching off for that run.
 
 ## Command line
 
