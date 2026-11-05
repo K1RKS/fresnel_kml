@@ -51,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clutter", type=float, default=0.0, help="clutter height added to terrain")
     p.add_argument("--trees", action=argparse.BooleanOptionalAction, default=False,
                    help="also check clearance over trees along the path (default off)")
+    p.add_argument("--tree-source", choices=("fixed", "lidar"), default="fixed",
+                   help="with --trees: a fixed tree height, or the lidar surface (trees and buildings) where "
+                        "the configured lidar covers the path, with the fixed height elsewhere (default fixed)")
+    p.add_argument("--lidar-width", type=float, default=0.6,
+                   help="with --tree-source lidar: sample across +/- this fraction of r1 (default 0.6, 0 for "
+                        "the centreline only)")
     p.add_argument("--tree-height", type=float, default=None,
                    help="tree height (default 100 ft / 30.5 m, in --units)")
     p.add_argument("--tree-clearance", type=float, default=None,
@@ -149,6 +155,15 @@ def summary(report: LinkReport) -> str:
                          f"{fmt_distance(opt.tree_clearance_a_m, u)} of {report.site_a.name} and "
                          f"{fmt_distance(opt.tree_clearance_b_m, u)} of {report.site_b.name}): "
                          f"{report.tree_status}, min clearance over trees {t}")
+        if report.surface_checked:
+            w = report.surface_worst
+            t = "n/a"
+            if w is not None and w.clearance is not None:
+                what = f"surface {fmt_height(w.height_m, u)} above ground" if w.lidar else "fixed-height trees"
+                t = f"{w.clearance:.2f} x r1 ({what}) at {fmt_distance(w.d_m, u, 2)}"
+            lines.append(f"  Lidar check ({', '.join(report.surface_sources) or 'no lidar'}, "
+                         f"{100 * (report.surface_coverage or 0):.0f}% coverage): {report.surface_status}, "
+                         f"min clearance {t}")
         if report.obstructions:
             h = 1 / FEET if u == "ft" else 1.0
             dist_unit, dist_scale = ("mi", 1 / MILE) if u == "ft" else ("km", 1 / 1000)
@@ -189,7 +204,7 @@ def main(argv=None, env=None) -> int:
                       elev_source=args.elev_source, stations=args.stations, ring_points=args.ring_points,
                       style=args.style, ring_every=args.ring_every, terrain_check=args.terrain_check,
                       mode=args.mode, color=args.color, coord_display=args.coord_display, units=args.units,
-                      trees=args.trees)
+                      trees=args.trees, tree_source=args.tree_source, lidar_width=args.lidar_width)
         scale = FEET if args.units == "ft" else 1.0
         if args.tree_height is not None:
             opt.tree_height_m = args.tree_height * scale

@@ -113,7 +113,8 @@ def _get(query: str, env) -> Response:
             return Response(200, body, [("Content-Type", JSON_TYPE), ("Cache-Control", "max-age=60")])
         if "map" in params:
             return _json(200, cfg.public_map())
-        return _json(200, {"sources": [{"name": "auto", "type": "chain"}] + cfg.public_sources()})
+        return _json(200, {"sources": [{"name": "auto", "type": "chain"}] + cfg.public_sources(),
+                           "surface": cfg.surface.public()})
     if "parse" in params:
         text = params["parse"][0]
         axis = (params.get("axis") or [""])[0]

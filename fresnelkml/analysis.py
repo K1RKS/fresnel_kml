@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 import random
+import time
 from dataclasses import dataclass, field
 
 from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
+from .surface import (LATERAL_FRACTIONS, SurfacePoint, grid_spacing, lateral_clearance, obstruction_markers,
+                      thin_for_plot)
 from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
@@ -22,6 +26,7 @@ MIN_R1_FOR_CLEARANCE = 0.5
 CLEAR_RATIO = 0.6
 END_WINDOW_M = 500 * 0.3048  # close-up terrain sampling next to each tower
 END_SAMPLES = 25
+REQUEST_LIMIT_S = 40.0  # lidar fetching stops by then, well inside the web server's 60 s timeout
 
 
 class AnalysisError(ValueError):
@@ -62,6 +67,8 @@ class Options:
     tree_height_m: float = 100 * 0.3048
     tree_clearance_a_m: float = 50 * 0.3048  # trees are ignored this far from site A
     tree_clearance_b_m: float = 50 * 0.3048  # and this far from site B
+    tree_source: str = "fixed"  # "lidar": highest-hit surface where covered, tree_height_m elsewhere
+    lidar_width: float = 0.6  # lidar samples across ±this fraction of r1 (0: centreline only)
 
 
 @dataclass
@@ -133,6 +140,14 @@ class LinkReport:
     min_tree_clearance_d_m: float | None = None
     min_tree_clearance_m: float | None = None  # line of sight minus tree tops at the worst point
     tree_status: str | None = None
+    surface_checked: bool = False
+    surface_points: list[SurfacePoint] = field(default_factory=list)
+    surface_sources: list[str] = field(default_factory=list)
+    surface_coverage: float | None = None  # share of stations with lidar
+    surface_spacing_m: float | None = None
+    surface_worst: SurfacePoint | None = None
+    min_surface_clearance_m: float | None = None  # line of sight minus the surface top at the worst point
+    surface_status: str | None = None
     elevation_sources: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -161,6 +176,30 @@ class LinkReport:
     @property
     def tree_obstructions(self) -> list[ProfilePoint]:
         return [p for p in self.all_samples if p.tree_clearance is not None and p.tree_clearance < CLEAR_RATIO]
+
+    @property
+    def surface_obstructions(self) -> list[SurfacePoint]:
+        return obstruction_markers(self.surface_points, CLEAR_RATIO)
+
+    def surface_dict(self) -> dict:
+        w = self.surface_worst
+        return {
+            "enabled": self.surface_checked,
+            "sources": self.surface_sources,
+            "coverage": None if self.surface_coverage is None else round(self.surface_coverage, 3),
+            "spacing_m": _r(self.surface_spacing_m),
+            "width": self.options.lidar_width,
+            "fallback_height_m": _r(self.options.tree_height_m),
+            "clearance_a_m": _r(self.options.tree_clearance_a_m),
+            "clearance_b_m": _r(self.options.tree_clearance_b_m),
+            "min_clearance": None if w is None or w.clearance is None else round(w.clearance, 3),
+            "min_clearance_d_m": None if w is None else _r(w.d_m),
+            "min_clearance_m": _r(self.min_surface_clearance_m),
+            "worst": None if w is None else _surface_point_dict(w),
+            "status": self.surface_status,
+            "plot": [_surface_point_dict(p) for p in thin_for_plot(self.surface_points, self.distance_m)],
+            "markers": [_surface_point_dict(p) for p in self.surface_obstructions],
+        }
 
     def to_dict(self) -> dict:
         def site(s: SiteResult) -> dict:
@@ -200,6 +239,7 @@ class LinkReport:
                 "min_clearance_m": _r(self.min_tree_clearance_m),
                 "status": self.tree_status,
             },
+            "surface": self.surface_dict(),
             "status": self.status,
             "zone_color": self.zone_color.to_dict(),
             "elevation_sources": self.elevation_sources,
@@ -229,6 +269,15 @@ def _point_dict(p: ProfilePoint) -> dict:
         "clearance": None if p.clearance is None else round(p.clearance, 3),
         "tree_top_m": _r(p.tree_top_m),
         "tree_clearance": None if p.tree_clearance is None else round(p.tree_clearance, 3),
+    }
+
+
+def _surface_point_dict(p: SurfacePoint) -> dict:
+    return {
+        "d_m": _r(p.d_m), "lat": round(p.lat, 7), "lon": round(p.lon, 7), "offset_m": _r(p.offset_m),
+        "top_m": _r(p.top_m), "height_m": _r(p.height_m), "effective_m": _r(p.effective_m),
+        "peak_m": _r(p.peak_m), "los_m": _r(p.los_m),
+        "clearance": None if p.clearance is None else round(p.clearance, 3), "lidar": p.lidar,
     }
 
 
@@ -277,6 +326,8 @@ def validate_options(opt: Options) -> None:
         ("coord_display", opt.coord_display in DISPLAY_FORMATS, f"must be one of {', '.join(DISPLAY_FORMATS)}"),
         ("units", opt.units in ("m", "ft"), "must be 'm' or 'ft'"),
         ("trees", isinstance(opt.trees, bool), "must be true or false"),
+        ("tree_source", opt.tree_source in ("fixed", "lidar"), "must be 'fixed' or 'lidar'"),
+        ("lidar_width", _finite(opt.lidar_width) and 0 <= opt.lidar_width <= 1, "must be between 0 and 1"),
         ("tree_height_m", _finite(opt.tree_height_m) and 0 <= opt.tree_height_m <= 150,
          "must be between 0 and 150 m (about 490 ft)"),
         ("tree_clearance_a_m", _finite(opt.tree_clearance_a_m) and 0 <= opt.tree_clearance_a_m <= 50_000,
@@ -315,15 +366,115 @@ def validate_site(site: Site, label: str) -> None:
             raise AnalysisError(f"{label}.asl_m is below its ground_m.", f"{label}.asl_m")
 
 
+class _ProfileLookup:
+    """Linear interpolation of terrain-profile values at any distance along the path."""
+
+    def __init__(self, samples: list[ProfilePoint]):
+        self.samples = samples
+        self.ds = [p.d_m for p in samples]
+
+    def __call__(self, d: float, attr: str) -> float:
+        i = bisect.bisect_left(self.ds, d)
+        if i <= 0:
+            return getattr(self.samples[0], attr)
+        if i >= len(self.samples):
+            return getattr(self.samples[-1], attr)
+        a, b = self.samples[i - 1], self.samples[i]
+        f = (d - a.d_m) / (b.d_m - a.d_m) if b.d_m > a.d_m else 0.0
+        return getattr(a, attr) + f * (getattr(b, attr) - getattr(a, attr))
+
+
+def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | None) -> None:
+    """LIDAR mode: sample the highest-hit surface across the zone; the fixed tree height fills gaps."""
+    opt, distance, warnings = report.options, report.distance_m, report.warnings
+    start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
+    if stop <= start:
+        warnings.append("No part of the path is outside both tree clearances, so lidar wasn't checked.")
+        return
+    fractions = (0.0,) if opt.lidar_width == 0 else LATERAL_FRACTIONS
+    spacing = grid_spacing(stop - start, sampler.cfg.spacing_m, len(fractions), sampler.cfg.max_points)
+    dists = [start + i * spacing for i in range(int((stop - start) / spacing) + 1)]
+    if stop - dists[-1] > 1e-6:
+        dists.append(stop)
+
+    stations, grid = [], []
+    for d in dists:
+        lat, lon, brg = geo.forward(site_a.lat, site_a.lon, report.bearing_ab, d) if d else (
+            site_a.lat, site_a.lon, report.bearing_ab)
+        lon = geo.normalize_lon(lon)
+        r1 = fresnel.zone_radius(d, distance - d, report.wavelength_m, 1)
+        theta = math.radians(brg)
+        for f in fractions:
+            y = f * opt.lidar_width * r1
+            grid.append((y, *(geo.offset(lat, lon, y * math.cos(theta), -y * math.sin(theta)) if y else (lat, lon))))
+        stations.append((d, lat, lon, r1))
+    got = sampler.sample([(g[1], g[2]) for g in grid], deadline)
+
+    lookup = _ProfileLookup(report.all_samples)
+    ra, rb, k = report.site_a, report.site_b, len(fractions)
+    points, covered = [], 0
+    for si, (d, lat, lon, r1) in enumerate(stations):
+        t = d / distance
+        los = (1 - t) * ra.asl_m + t * rb.asl_m
+        bulge = fresnel.earth_bulge(d, distance - d, opt.k)
+        ground, effective = lookup(d, "ground_m"), lookup(d, "effective_m")
+        usable = r1 >= MIN_R1_FOR_CLEARANCE
+        if got.values[si * k] is None:
+            peak = effective + opt.tree_height_m
+            points.append(SurfacePoint(d, lat, lon, 0.0, peak - bulge, ground, effective, peak, los, r1,
+                                       (los - peak) / r1 if usable else None, False))
+            continue
+        covered += 1
+        worst, peak = None, -math.inf
+        for j in range(k):
+            v = got.values[si * k + j]
+            if v is None:
+                continue
+            y, plat, plon = grid[si * k + j]
+            peak = max(peak, v + bulge)
+            c = lateral_clearance(los - v - bulge, y, r1) if usable else None
+            if worst is None or (c is not None and (worst[0] is None or c < worst[0])):
+                worst = (c, y, plat, plon, v)
+        c, y, plat, plon, v = worst
+        points.append(SurfacePoint(d, plat, plon, y, v, ground, effective, peak, los, r1, c, True))
+
+    report.surface_checked = True
+    report.surface_points = points
+    report.surface_spacing_m = spacing
+    report.surface_coverage = covered / len(points)
+    report.surface_sources = list(dict.fromkeys(label for label in got.labels if label))
+    scored = [p for p in points if p.clearance is not None]
+    if scored:
+        w = min(scored, key=lambda p: p.clearance)
+        report.surface_worst = w
+        report.min_surface_clearance_m = w.los_m - w.top_m - fresnel.earth_bulge(w.d_m, distance - w.d_m, opt.k)
+    report.surface_status = clearance_status(report.surface_worst.clearance if report.surface_worst else None)
+
+    u = opt.units
+    fallback = fmt_height(opt.tree_height_m, u)
+    if covered == 0 and not got.timed_out and not got.failed:
+        warnings.append(f"No lidar covers this path, so the {fallback} fixed tree height was used.")
+    elif covered < len(points):
+        warnings.append(f"Lidar covered {100 * report.surface_coverage:.0f}% of the checked path; "
+                        f"the rest uses the {fallback} fixed tree height.")
+    if got.timed_out:
+        warnings.append("Some lidar data didn't arrive in time and was replaced by the fixed tree height.")
+    if got.errors:
+        warnings.append(f"Lidar source error: {got.errors[0][:160]}")
+    if spacing > sampler.cfg.spacing_m + 1e-9:
+        warnings.append(f"Long path: lidar was sampled every {fmt_distance(spacing, u, 1)}.")
+
+
 def terrain_station_count(distance_m: float, stations: int) -> int:
     n = max(stations, math.ceil(distance_m / TERRAIN_SPACING_M), MIN_TERRAIN_STATIONS)
     return min(n, MAX_STATIONS)
 
 
 def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, elevation=None, config=None,
-            rng: random.Random | None = None, env=None) -> LinkReport:
-    """Compute everything needed to render the KML. `elevation` is an ElevationChain (built from
-    the server config when omitted and a lookup is needed)."""
+            rng: random.Random | None = None, env=None, surface=None) -> LinkReport:
+    """Compute everything needed to render the KML. `elevation` is an ElevationChain and `surface` a
+    SurfaceSampler (each built from the server config when omitted and needed)."""
+    started = time.monotonic()
     opt = options or Options()
     validate_options(opt)
     validate_site(site_a, "site_a")
@@ -354,7 +505,7 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         warnings.append("Near the pole without pyproj installed; geometry uses a spherical approximation.")
 
     needs_ground = [s.agl_m is not None and s.ground_m is None for s in (site_a, site_b)]
-    terrain = opt.terrain_check if opt.terrain_check is not None else any(needs_ground)
+    terrain = opt.terrain_check if opt.terrain_check is not None else (any(needs_ground) or opt.trees)
 
     profile_pts = geo.path_points(site_a.lat, site_a.lon, site_b.lat, site_b.lon,
                                   terrain_station_count(distance, n_mesh)) if terrain else []
@@ -467,7 +618,16 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         if min_c is None:
             warnings.append("Link too short for a meaningful Fresnel clearance check.")
 
-        if opt.trees:
+        if opt.trees and opt.tree_source == "lidar":
+            if surface is None:
+                from .config import load_config
+                from .elevation import open_cache
+                from .surface import SurfaceSampler
+                cfg = config or load_config(env=env)
+                surface = SurfaceSampler(cfg.surface, open_cache(cfg.cache_dir))
+            deadline = min(started + REQUEST_LIMIT_S, time.monotonic() + surface.cfg.time_budget_s)
+            check_surface(report, site_a, surface, deadline)
+        elif opt.trees:
             report.trees_checked = True
             start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
             for p in report.profile + report.profile_a + report.profile_b:
@@ -484,6 +644,8 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
             else:
                 warnings.append("No part of the path is outside both tree clearances, so trees weren't checked.")
             report.tree_status = clearance_status(report.min_tree_clearance)
+    elif opt.trees:
+        warnings.append("Trees and lidar are only checked with the terrain check on.")
 
     sources = [r.ground_source for r in (ra, rb) if r.ground_source]
     sources += [r.source for r in looked_up]

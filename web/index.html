@@ -109,10 +109,16 @@
       </div>
     </div>
     <div class="row trees-row">
-      <label class="inline"><input id="trees" type="checkbox"> Trees along the path</label>
-      <label><span>Tree height (<span class="unit">m</span>)</span> <input id="tree_height" type="number" step="any" value="100" min="0" disabled></label>
+      <div class="tree-mode" role="radiogroup" aria-label="Obstructions along the path">
+        <span>Along the path</span>
+        <label class="inline"><input type="radio" name="tree_mode" value="none" checked> None</label>
+        <label class="inline"><input type="radio" name="tree_mode" value="trees"> Trees</label>
+        <label class="inline" id="lidar-choice"><input type="radio" name="tree_mode" value="lidar"> LIDAR</label>
+      </div>
+      <label><span><span id="tree_height_name">Tree height</span> (<span class="unit">m</span>)</span> <input id="tree_height" type="number" step="any" value="100" min="0" disabled></label>
       <label><span>No trees within (<span class="unit">m</span>) of <span class="site-name" data-site="site_a">Site A</span></span> <input id="tree_clearance_a" type="number" step="any" value="50" min="0" disabled></label>
       <label><span>No trees within (<span class="unit">m</span>) of <span class="site-name" data-site="site_b">Site B</span></span> <input id="tree_clearance_b" type="number" step="any" value="50" min="0" disabled></label>
+      <label class="lidar-only" hidden><span>Lidar width (&times; r1)</span> <input id="lidar_width" type="number" step="0.1" value="0.6" min="0" max="1" disabled></label>
     </div>
     <p id="lookup-hint" class="hint"></p>
 
@@ -164,7 +170,7 @@
   <div id="map-box">
     <h3>Map</h3>
     <div id="map" role="region" aria-label="Map of the link"></div>
-    <p class="legend"><span class="lg zone-fill"></span>Fresnel zone (top-down) <span class="lg sixty-fill"></span>60% zone (in the layer menu) <span class="lg los"></span>line of sight <span class="lg-dot"></span>terrain below 60% <span class="lg-dot tree"></span>trees below 60% &middot; click the map to zoom with the scroll wheel</p>
+    <p class="legend"><span class="lg zone-fill"></span>Fresnel zone (top-down) <span class="lg sixty-fill"></span>60% zone (in the layer menu) <span class="lg los"></span>line of sight <span class="lg-dot"></span>terrain below 60% <span class="lg-dot tree"></span>trees or lidar surface below 60% &middot; click the map to zoom with the scroll wheel</p>
   </div>
   <div id="profile-box">
     <h3>Terrain profile</h3>
@@ -174,7 +180,7 @@
     <svg id="profile-a" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site A"></svg>
     <h4 id="profile-title-b" class="plot-title"></h4>
     <svg id="profile-b" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site B"></svg>
-    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees <span class="lg-dot tree"></span>clearance over trees below 60%</p>
+    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees (fixed height) <span class="lg-lidar"></span>lidar surface <span class="lg-dot tree"></span>clearance over trees or lidar below 60%</p>
   </div>
 </section>
 
@@ -188,7 +194,7 @@
   "format": "kml"
 }</pre>
 <pre id="curl-example">curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/api/fresnel.cgi -o link.kml</pre>
-  <p>Each site takes <code>lat</code>/<code>lon</code> (decimal degrees by default; DMS and DDM strings also work) or one <code>position</code> string, and exactly one of <code>agl_m</code> or <code>asl_m</code>. <code>GET api/fresnel.cgi?sources</code> lists elevation sources; <code>GET api/fresnel.cgi?parse=TEXT</code> decodes a coordinate; <code>GET api/fresnel.cgi?ground&amp;lat=LAT&amp;lon=LON</code> (or <code>&amp;position=TEXT</code>) looks up the ground elevation at one point.</p>
+  <p>Each site takes <code>lat</code>/<code>lon</code> (decimal degrees by default; DMS and DDM strings also work) or one <code>position</code> string, and exactly one of <code>agl_m</code> or <code>asl_m</code>. <code>GET api/fresnel.cgi?sources</code> lists elevation and lidar surface sources; <code>GET api/fresnel.cgi?parse=TEXT</code> decodes a coordinate; <code>GET api/fresnel.cgi?ground&amp;lat=LAT&amp;lon=LON</code> (or <code>&amp;position=TEXT</code>) looks up the ground elevation at one point.</p>
 </details>
 </main>
 

@@ -57,8 +57,9 @@ Then open `http://SERVER/site/` in a browser.
 
 ## 4. Optional: elevation sources
 
-With no config file, the server looks up ground elevation from the public OpenTopoData server, falling back to Open-Elevation. To change that, create `/etc/fresnelkml/config.json` from [config.example.json](config.example.json) and edit the `chain` list. Sources are tried in order, per point.
+With no config file, the server looks up ground elevation from the USGS 3DEP image service, then the public OpenTopoData server, falling back to Open-Elevation. To change that, create `/etc/fresnelkml/config.json` from [config.example.json](config.example.json) and edit the `chain` list. Sources are tried in order, per point.
 
+- `arcgis_image` with a `url`: an ArcGIS image service sampled with `getSamples`, such as USGS 3DEP. `units` is `m`, `ft` or `ftUS`; `retries` defaults to 0 and `timeout_s` should allow for slow responses (3DEP can take 10 to 20 s for a long path).
 - `opentopodata` with a `url`: the public server or your own (`http://10.0.0.5:5000/v1`). Set `min_interval_s` to 0 for your own server.
 - `local_hgt` with a `path`: a folder of SRTM tiles. Download them once with:
 
@@ -70,13 +71,33 @@ With no config file, the server looks up ground elevation from the public OpenTo
   Oregon and Washington together are 63 tiles, about 1.6 GB uncompressed (about 650 MB with `--keep-gz`, but lookups are slower). The download can run on another machine; copy the folder over afterwards.
 
 - For fully offline use, make the chain only the `local_hgt` entry, or only a LAN OpenTopoData entry.
-- `cache_dir` caches lookups on disk. Create it and make it writable by `www-data`:
+- `cache_dir` caches lookups on disk, including lidar samples, so running the same link again is much faster. Recommended. Create it and make it writable by `www-data`:
 
   ```bash
   sudo install -d -o www-data -g www-data /var/cache/fresnelkml
   ```
 
 - A config file in another place can be selected with `fastcgi_param FRESNEL_CONFIG /path/config.json;`.
+
+### Lidar surface sources
+
+The page's "Along the path: LIDAR" choice samples highest-hit surface models (tree tops and roofs). Without a `surface` section the server uses Oregon DOGAMI's public service. To add or replace sources:
+
+```json
+"surface": {
+  "sources": [
+    {"name": "dogami", "label": "Oregon DOGAMI lidar",
+     "url": "https://gis.dogami.oregon.gov/arcgis/rest/services/lidar/DIGITAL_SURFACE_MODEL_MOSAIC/ImageServer",
+     "units": "ftUS", "bbox": [-124.8, 41.9, -116.4, 46.4]}
+  ],
+  "spacing_m": 3, "max_points": 25000, "threads": 6, "timeout_s": 20, "time_budget_s": 30
+}
+```
+
+- Each source is an ArcGIS image service of a highest-hit (first-return) surface, in heights above sea level, with `getSamples` enabled and no login. `units` is `m`, `ft` or `ftUS`. `label` is shown to users. `bbox` (`[west, south, east, north]` in degrees) skips the source for points outside it.
+- Sources are tried in order; a later one only fills points an earlier one has no data for.
+- `spacing_m` is the distance between samples along the path, `max_points` caps the samples per request (long paths get a wider spacing), and lidar fetching stops after `time_budget_s` or 40 s from the start of the request, whichever is first, so the request finishes well inside the 60 s `fastcgi_read_timeout`.
+- `"sources": []` turns LIDAR off; the page then greys it out.
 
 ## 5. Optional: map tile servers
 

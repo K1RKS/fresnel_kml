@@ -7,8 +7,9 @@ import json
 import os
 from dataclasses import dataclass, field
 
-from .elevation import (ElevationChain, GoogleProvider, OpenElevationProvider, OpenTopoDataProvider,
-                        USGSProvider, open_cache)
+from .arcgis import UNIT_SCALE
+from .elevation import (ArcGISImageProvider, ElevationChain, GoogleProvider, OpenElevationProvider,
+                        OpenTopoDataProvider, USGSProvider, open_cache)
 from .local_hgt import LocalHgtProvider
 
 DEFAULT_CONFIG_PATH = "/etc/fresnelkml/config.json"
@@ -16,6 +17,9 @@ DEFAULT_CONFIG_PATH = "/etc/fresnelkml/config.json"
 DEFAULT_CONFIG = {
     "elevation": {
         "chain": [
+            {"name": "3dep", "type": "arcgis_image",
+             "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer",
+             "units": "m", "timeout_s": 20},
             {"name": "opentopodata", "type": "opentopodata",
              "url": "https://api.opentopodata.org/v1", "datasets": "ned10m,srtm30m",
              "batch": 100, "min_interval_s": 1.0},
@@ -46,13 +50,39 @@ DEFAULT_CONFIG = {
         ],
         "cache_ttl_s": 300,
     },
+    "surface": {
+        "sources": [
+            {"name": "dogami", "label": "Oregon DOGAMI lidar",
+             "url": "https://gis.dogami.oregon.gov/arcgis/rest/services/lidar/DIGITAL_SURFACE_MODEL_MOSAIC/ImageServer",
+             "units": "ftUS", "bbox": [-124.8, 41.9, -116.4, 46.4]},
+        ],
+        "spacing_m": 3.0,
+        "max_points": 25000,
+        "threads": 6,
+        "timeout_s": 20,
+        "time_budget_s": 30,
+    },
 }
 
-SOURCE_TYPES = ("opentopodata", "open-elevation", "usgs", "google", "local_hgt")
+SOURCE_TYPES = ("arcgis_image", "opentopodata", "open-elevation", "usgs", "google", "local_hgt")
 
 
 class ConfigError(ValueError):
     pass
+
+
+@dataclass
+class SurfaceConfig:
+    """Lidar surface models (highest hit: tree tops, roofs) for the LIDAR obstruction check."""
+    sources: list[dict] = field(default_factory=list)
+    spacing_m: float = 3.0
+    max_points: int = 25000
+    threads: int = 6
+    timeout_s: float = 20.0
+    time_budget_s: float = 30.0
+
+    def public(self) -> list[dict]:
+        return [{"name": s["name"], "label": s["label"]} for s in self.sources]
 
 
 @dataclass
@@ -67,6 +97,7 @@ class Config:
     node_feeds: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["nodes"]["feeds"]))
     nodes_cache_ttl_s: float = DEFAULT_CONFIG["nodes"]["cache_ttl_s"]
     nodes_timeout_s: float | None = None
+    surface: SurfaceConfig = field(default_factory=lambda: _parse_surface(None))
 
     def source_names(self) -> list[str]:
         return [s["name"] for s in self.chain]
@@ -170,6 +201,68 @@ def _parse_nodes(data) -> tuple[list[dict], float, float | None]:
     return feeds, float(ttl), (float(timeout) if timeout is not None else None)
 
 
+_SURFACE_KEYS = {"sources", "spacing_m", "max_points", "threads", "timeout_s", "time_budget_s"}
+_SURFACE_SOURCE_KEYS = {"name", "label", "url", "units", "bbox"}
+
+
+def _positive(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _parse_surface(data) -> SurfaceConfig:
+    if data is None:
+        data = DEFAULT_CONFIG["surface"]
+    if not isinstance(data, dict):
+        raise ConfigError("'surface' must be an object")
+    unknown = set(data) - _SURFACE_KEYS
+    if unknown:
+        raise ConfigError(f"surface has unknown key(s): {', '.join(sorted(unknown))}")
+    raw = data.get("sources", DEFAULT_CONFIG["surface"]["sources"])
+    if not isinstance(raw, list):
+        raise ConfigError("surface.sources must be a list")
+    sources = []
+    for i, entry in enumerate(raw):
+        where = f"surface.sources[{i}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{where} must be an object")
+        unknown = set(entry) - _SURFACE_SOURCE_KEYS
+        if unknown:
+            raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")
+        name, url = entry.get("name"), entry.get("url")
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"{where}.name must be a non-empty string")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"{where}.url must be an http(s) URL")
+        units = entry.get("units", "m")
+        if units not in UNIT_SCALE:
+            raise ConfigError(f"{where}.units must be one of {', '.join(UNIT_SCALE)}")
+        label = entry.get("label", name)
+        if not isinstance(label, str) or not label:
+            raise ConfigError(f"{where}.label must be a non-empty string")
+        bbox = entry.get("bbox")
+        if bbox is not None and not (isinstance(bbox, list) and len(bbox) == 4
+                                     and all(isinstance(v, (int, float)) for v in bbox)
+                                     and bbox[0] < bbox[2] and bbox[1] < bbox[3]):
+            raise ConfigError(f"{where}.bbox must be [west, south, east, north] in degrees")
+        sources.append({"name": name, "label": label, "url": url, "units": units, "bbox": bbox})
+    names = [s["name"] for s in sources]
+    if len(set(names)) != len(names):
+        raise ConfigError("surface source names must be unique")
+    d = DEFAULT_CONFIG["surface"]
+    out = SurfaceConfig(sources)
+    for key in ("spacing_m", "timeout_s", "time_budget_s"):
+        value = data.get(key, d[key])
+        if not _positive(value):
+            raise ConfigError(f"surface.{key} must be a positive number")
+        setattr(out, key, float(value))
+    for key in ("max_points", "threads"):
+        value = data.get(key, d[key])
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ConfigError(f"surface.{key} must be a positive integer")
+        setattr(out, key, value)
+    return out
+
+
 def _validate_source(entry, index: int) -> dict:
     if not isinstance(entry, dict):
         raise ConfigError(f"elevation.chain[{index}] must be an object")
@@ -182,6 +275,13 @@ def _validate_source(entry, index: int) -> dict:
         raise ConfigError(f"elevation.chain[{index}].name must be a non-empty string")
     if stype == "local_hgt" and not isinstance(out.get("path"), str):
         raise ConfigError(f"elevation.chain[{index}] (local_hgt) needs a 'path'")
+    if stype == "arcgis_image":
+        if not isinstance(out.get("url"), str):
+            raise ConfigError(f"elevation.chain[{index}] (arcgis_image) needs a 'url'")
+        if out.get("units", "m") not in UNIT_SCALE:
+            raise ConfigError(f"elevation.chain[{index}].units must be one of {', '.join(UNIT_SCALE)}")
+        if "retries" in out and (not isinstance(out["retries"], int) or out["retries"] < 0):
+            raise ConfigError(f"elevation.chain[{index}].retries must be a non-negative integer")
     if "url" in out and not (isinstance(out["url"], str) and out["url"].startswith(("http://", "https://"))):
         raise ConfigError(f"elevation.chain[{index}].url must be an http(s) URL")
     for key in ("batch",):
@@ -217,7 +317,7 @@ def parse_config(data: dict, path: str | None = None) -> Config:
     tile_servers, default_tiles = _parse_map(data.get("map"))
     feeds, nodes_ttl, nodes_timeout = _parse_nodes(data.get("nodes"))
     return Config(chain, float(timeout), retries, cache_dir, path, tile_servers, default_tiles,
-                  feeds, nodes_ttl, nodes_timeout)
+                  feeds, nodes_ttl, nodes_timeout, _parse_surface(data.get("surface")))
 
 
 def load_config(path: str | None = None, env=None) -> Config:
@@ -243,6 +343,9 @@ def make_provider(spec: dict, timeout_s: float = 10.0, env=None):
     if stype == "local_hgt":
         return LocalHgtProvider(name, kwargs["path"])
     kwargs.setdefault("timeout_s", timeout_s)
+    if stype == "arcgis_image":
+        allowed = {"url", "units", "batch", "retries", "timeout_s"}
+        return ArcGISImageProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})
     if stype == "opentopodata":
         allowed = {"url", "datasets", "batch", "min_interval_s", "timeout_s"}
         return OpenTopoDataProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})

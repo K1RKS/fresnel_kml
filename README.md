@@ -43,9 +43,9 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 
 - **Position**: `lat` and `lon` (decimal degrees by default, or DMS/DDM strings such as `"37°02'03\"N"`), or one `position` string: a lat,lon pair, UTM, MGRS, Maidenhead locator, full Plus code, `geo:` URI or ISO 6709.
 - **Height**: exactly one of `agl_m` (above ground; the ground is looked up) or `asl_m` (above sea level; no lookup needed). `ground_m` overrides the lookup.
-- **Options** (all optional): `freq_ghz`, `zone`, `sixty`, `k`, `clutter_m`, `elev_source`, `stations`, `ring_points`, `style` (`mesh`/`rings`), `ring_every`, `terrain_check` (`true`/`false`/`null` = only when a lookup is needed anyway), `mode` (`absolute`/`relative`), `units` (`m`/`ft`), `color` (`random`, `#RRGGBB`, `#RRGGBBAA` or a name), `coord_display` (`decimal`/`dms`/`ddm`).
+- **Options** (all optional): `freq_ghz`, `zone`, `sixty`, `k`, `clutter_m`, `elev_source`, `stations`, `ring_points`, `style` (`mesh`/`rings`), `ring_every`, `terrain_check` (`true`/`false`/`null` = only when a lookup is needed anyway), `mode` (`absolute`/`relative`), `units` (`m`/`ft`), `color` (`random`, `#RRGGBB`, `#RRGGBBAA` or a name), `coord_display` (`decimal`/`dms`/`ddm`), `trees` (`true` to check obstructions above the ground), `tree_source` (`fixed` or `lidar`), `lidar_width` (0 to 1, default 0.6), `tree_height_m`, `tree_clearance_a_m` and `tree_clearance_b_m` (or `tree_clearance_m` for both). See [Trees and lidar](#trees-and-lidar).
 - **Response**: the KML file as a download, or `{"kml", "report", "warnings"}` with `"format": "json"`. Errors are JSON `{"error", "field"}` with status 400, 405, 413, 502 (no elevation available) or 504.
-- `GET ?sources` lists the configured elevation sources; `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
+- `GET ?sources` lists the configured elevation sources and lidar surface sources (`surface`); `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
 - `GET ?ground&lat=LAT&lon=LON` (or `&position=TEXT`, plus an optional `&source=NAME`) looks up the ground elevation at one point and returns `{"lat", "lon", "ground_m", "source", "assumed_zero"}`.
 - `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
 
@@ -62,7 +62,7 @@ AREDN's antenna height is meant to be above ground, but some nodes have their he
 
 Under each site's heights, "Ground here (lookup)" shows what the elevation lookup gives for that position (using the chosen elevation source), and for a height above sea level, how far the antenna is above or below that ground. It's for reference only: the "Ground elevation" box still overrides the lookup for a height above ground.
 
-The page remembers the mode, the picks, your changes and the tree settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
+The page remembers the mode, the picks, your changes and the "Along the path" settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
 For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
@@ -72,7 +72,17 @@ The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) s
 
 ### Elevation sources
 
-By default the server uses the public OpenTopoData API (`ned10m`, then `srtm30m`), with Open-Elevation as a fallback. `/etc/fresnelkml/config.json` can change the chain: add a self-hosted OpenTopoData server by URL, or a folder of SRTM tiles (`local_hgt`) for offline use. See [deploy/config.example.json](deploy/config.example.json) and `tools/fetch_hgt.py`.
+By default the server uses the USGS 3DEP bare-earth image service (lidar-derived where flown, about 3 m resolution, US only), then the public OpenTopoData API (`ned10m`, then `srtm30m`), with Open-Elevation as a last fallback. 3DEP can take 10 to 20 s for a long path; points it can't answer fall through to the next source. `/etc/fresnelkml/config.json` can change the chain: add a self-hosted OpenTopoData server by URL, or a folder of SRTM tiles (`local_hgt`) for offline use. See [deploy/config.example.json](deploy/config.example.json) and `tools/fetch_hgt.py`.
+
+### Trees and lidar
+
+"Along the path" on the page (option `trees`, with `tree_source`) checks clearance over things standing on the ground, as well as the terrain. Both modes ignore a stretch next to each site ("No trees within", default 50 ft), so a site's own roof or mast doesn't count.
+
+- **None**: terrain only.
+- **Trees**: a fixed tree height (default 100 ft) everywhere along the path. Drawn in green.
+- **LIDAR**: the highest-hit lidar surface (tree tops, roofs and anything else standing), sampled every 3 m along the path and across the zone: on the line of sight and at ±half and ±all of the lidar width, a fraction of r1 (default 0.6, the 60% zone; 0 checks the line of sight only). Something beside the line of sight counts by its distance from the zone's axis. Where no lidar covers the path, the fixed tree height is used instead and the report says what share of the path had lidar. Lidar is drawn in blue, fixed-height trees in green. Long paths are sampled more coarsely (at most 25,000 points), and lidar that doesn't arrive within the time budget falls back to the fixed height with a warning.
+
+The default lidar source is the Oregon DOGAMI highest-hit surface (3 ft cells, all of Oregon that's been flown, plus some of the Washington side of the Columbia). Other public ArcGIS image services can be added in the `surface` section of the server config; see [deploy/config.example.json](deploy/config.example.json). Washington DNR's lidar services need a login, so they aren't included. When Trees or LIDAR is chosen, the terrain check runs even in "auto" mode.
 
 ## Command line
 

@@ -51,6 +51,7 @@ def no_network_or_sleep(monkeypatch):
         raise AssertionError(f"unexpected network call: {args}")
 
     monkeypatch.setattr(httpjson, "get_json", blocked)
+    monkeypatch.setattr(httpjson, "post_form_json", blocked)
     monkeypatch.setattr(elevation, "_sleep", lambda s: None)
     monkeypatch.setenv("FRESNEL_CONFIG", "")
 

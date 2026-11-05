@@ -138,7 +138,7 @@ function anyLookupNeeded() {
 function updateLookupHint() {
   const tc = $("#terrain_check").value;
   const lookup = anyLookupNeeded();
-  const terrain = tc === "on" || (tc === "auto" && lookup);
+  const terrain = tc === "on" || (tc === "auto" && (lookup || treeMode() !== "none"));
   let text;
   if (!lookup && !terrain) text = "No elevation lookup will be made.";
   else if (terrain) text = "Ground elevations along the path will be looked up for the terrain check.";
@@ -188,6 +188,26 @@ function readSite(key) {
   return site;
 }
 
+function treeMode() {
+  const checked = $("input[name=tree_mode]:checked");
+  return checked ? checked.value : "none";
+}
+
+function setTreeMode(mode) {
+  const radio = $(`input[name=tree_mode][value=${mode}]`);
+  if (radio && !radio.disabled) radio.checked = true;
+  syncTreeInputs();
+}
+
+// Each choice enables the fields it uses; in LIDAR mode the tree height only fills gaps in the lidar.
+function syncTreeInputs() {
+  const mode = treeMode();
+  for (const id of ["#tree_height", "#tree_clearance_a", "#tree_clearance_b"]) $(id).disabled = mode === "none";
+  $("#lidar_width").disabled = mode !== "lidar";
+  $(".lidar-only").hidden = mode !== "lidar";
+  $("#tree_height_name").textContent = mode === "lidar" ? "Fallback tree height" : "Tree height";
+}
+
 function num(id) {
   const v = $(`#${id}`).value.trim();
   return v === "" ? undefined : Number(v);
@@ -211,7 +231,9 @@ function buildRequest() {
     units: $("#units").value,
     color: $("#color_random").checked ? "random" : $("#color").value,
     coord_display: $("#coord_display").value,
-    trees: $("#trees").checked,
+    trees: treeMode() !== "none",
+    tree_source: treeMode() === "lidar" ? "lidar" : "fixed",
+    lidar_width: treeMode() === "lidar" ? num("lidar_width") : undefined,
     tree_height_m: num("tree_height"),
     tree_clearance_a_m: num("tree_clearance_a"),
     tree_clearance_b_m: num("tree_clearance_b"),
@@ -306,6 +328,21 @@ function showResult(data, units, picks = [], feedHeights = []) {
       rows.push(["Min clearance over trees",
         `<span class="badge ${t.status}">${t.status}</span> ${tc}<br><small>${hfmt(t.height_m)} trees, ignored within ${dfmt(t.clearance_a_m)} of ${esc(a.name)} and ${dfmt(t.clearance_b_m)} of ${esc(b.name)}</small>`]);
     }
+    const sf = r.surface;
+    if (sf && sf.enabled) {
+      const w = sf.worst;
+      let detail = "n/a";
+      if (w && w.clearance !== null) {
+        const what = w.lidar ? `lidar surface ${hfmt(w.height_m)} above ground` : `${hfmt(sf.fallback_height_m)} trees, no lidar here`;
+        const side = w.offset_m ? `, ${dfmt(Math.abs(w.offset_m))} off the line of sight` : "";
+        detail = `${w.clearance.toFixed(2)} \u00d7 r1 (${what}${side}) at ${dfmt(w.d_m, 2)}`;
+      }
+      const sources = sf.sources.length ? sf.sources.join(", ") : "no lidar";
+      rows.push(["Min clearance over lidar surface",
+        `<span class="badge ${sf.status}">${sf.status}</span> ${detail}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
+        + `every ${dfmt(sf.spacing_m)} across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
+        + `ignored within ${dfmt(sf.clearance_a_m)} of ${esc(a.name)} and ${dfmt(sf.clearance_b_m)} of ${esc(b.name)}</small>`]);
+    }
   }
   rows.push(["Elevation source", esc(r.elevation_sources.join(", ") || "none")]);
   $("#summary-table").innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
@@ -348,7 +385,8 @@ function drawProfile(r) {
     { d: 0, name: a.name, ground: p[0].ground_m, top: p[0].los_m },
     { d: D, name: b.name, ground: p[p.length - 1].ground_m, top: p[p.length - 1].los_m },
   ];
-  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a" });
+  const surface = r.surface && r.surface.enabled ? r.surface : null;
+  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface });
   const zoom = [[r.profile_a, "a", "#profile-a", "#profile-title-a", `First ${dfmt(r.end_window_m)} from ${a.name}`],
                 [r.profile_b, "b", "#profile-b", "#profile-title-b", `Last ${dfmt(r.end_window_m)} to ${b.name}`]];
   for (const [pts, from, svgSel, titleSel, title] of zoom) {
@@ -356,7 +394,7 @@ function drawProfile(r) {
     $(svgSel).hidden = $(titleSel).hidden = !show;
     if (!show) continue;
     $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
-    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from });
+    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface });
   }
 }
 
@@ -431,6 +469,12 @@ function drawMap(r) {
         .addTo(mapGroups["Obstructions"]);
     }
   }
+  if (r.surface && r.surface.enabled) {
+    for (const q of r.surface.markers) {
+      L.circleMarker([q.lat, q.lon], { radius: 5, color: "#b02a37", weight: 2, fill: false })
+        .bindTooltip(surfaceTip(q, a)).addTo(mapGroups["Obstructions"]);
+    }
+  }
   map.invalidateSize();
   map.fitBounds(L.latLngBounds(r.map.los).pad(0.15));
 }
@@ -447,6 +491,23 @@ function treeRuns(p) {
   return runs.filter((r) => r.length > 1);
 }
 
+// Consecutive lidar-check stations that share a source: lidar, or the fixed tree height where there's none.
+function surfaceRuns(p) {
+  const runs = [];
+  for (const q of p) {
+    const last = runs[runs.length - 1];
+    if (last && last[0].lidar === q.lidar) last.push(q);
+    else runs.push([q]);
+  }
+  return runs.filter((r) => r.length > 1);
+}
+
+function surfaceTip(q, from) {
+  const what = q.lidar ? `lidar surface ${hfmt(q.height_m)} above ground` : "trees (no lidar here)";
+  const side = q.offset_m ? `, ${dfmt(Math.abs(q.offset_m))} off the line of sight` : "";
+  return `${what}${side}: ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(from)}`;
+}
+
 // One terrain-profile chart. Every chart has the same pixel size; each picks its own X and Y scale.
 // opts.from is "a" (label distances from site A) or "b" (label distances to site B).
 function drawPlot(svg, p, opts) {
@@ -456,8 +517,12 @@ function drawPlot(svg, p, opts) {
   const span = d1 - d0 || 1;
   const eps = span * 1e-6;
   const visible = opts.masts.filter((m) => m.d >= d0 - eps && m.d <= d1 + eps);
+  const inView = (q) => q.d_m >= d0 - eps && q.d_m <= d1 + eps;
+  const sp = opts.surface ? opts.surface.plot.filter(inView) : [];
+  const sm = opts.surface ? opts.surface.markers.filter(inView) : [];
   const ys = p.flatMap((q) => [q.effective_m, q.los_m, q.zone_bottom_m])
     .concat(p.filter((q) => q.tree_top_m !== null && q.tree_top_m !== undefined).map((q) => q.tree_top_m))
+    .concat(sp.map((q) => q.peak_m))
     .concat(visible.flatMap((m) => [m.ground, m.top]));
   let yMin = Math.min(...ys), yMax = Math.max(...ys);
   const pad = Math.max(3, (yMax - yMin) * 0.08);
@@ -484,6 +549,11 @@ function drawPlot(svg, p, opts) {
     const bottom = run.slice().reverse().map((q) => `${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`);
     parts.push(`<path class="trees" d="M${top.join("L")}L${bottom.join("L")}Z"/>`);
   }
+  for (const run of surfaceRuns(sp)) {
+    const top = run.map((q) => `${x(q.d_m).toFixed(1)},${y(q.peak_m).toFixed(1)}`);
+    const bottom = run.slice().reverse().map((q) => `${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`);
+    parts.push(`<path class="${run[0].lidar ? "lidar" : "trees"}" d="M${top.join("L")}L${bottom.join("L")}Z"/>`);
+  }
   parts.push(`<path class="r60" d="${line("r60_bottom_m")}"/><path class="zone" d="${line("zone_bottom_m")}"/>`,
     `<path class="los" d="${line("los_m")}"/>`);
   for (const q of p.filter((q) => q.clearance !== null && q.clearance < 0.6)) {
@@ -491,6 +561,9 @@ function drawPlot(svg, p, opts) {
   }
   for (const q of p.filter((q) => q.tree_clearance !== null && q.tree_clearance !== undefined && q.tree_clearance < 0.6)) {
     parts.push(`<circle class="tree-obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.tree_top_m).toFixed(1)}" r="3.5"><title>clearance over trees ${q.tree_clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(opts.masts[0].name)}</title></circle>`);
+  }
+  for (const q of sm) {
+    parts.push(`<circle class="tree-obstruction" cx="${x(q.d_m).toFixed(1)}" cy="${y(q.peak_m).toFixed(1)}" r="3.5"><title>${surfaceTip(q, opts.masts[0].name)}</title></circle>`);
   }
   for (const m of opts.masts) {
     if (visible.includes(m)) {
@@ -563,6 +636,16 @@ function download() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function disableLidar() {
+  const radio = $("input[name=tree_mode][value=lidar]");
+  radio.disabled = true;
+  $("#lidar-choice").classList.add("disabled");
+  if (radio.checked) {
+    setTreeMode("trees");
+    save();
+  }
+}
+
 async function loadSources() {
   try {
     const resp = await fetch(`${API}?sources`);
@@ -576,6 +659,10 @@ async function loadSources() {
       opt.textContent = `${s.name} (${s.type})`;
       sel.appendChild(opt);
     }
+    const surface = data.surface || [];
+    $("#lidar-choice").title = surface.length ? `Lidar from ${surface.map((s) => s.label).join(", ")}`
+      : "No lidar sources are configured on this server";
+    if (!surface.length) disableLidar();
   } catch (err) {
     /* the dropdown keeps just "auto" */
   }
@@ -594,9 +681,11 @@ function init() {
     updateUnitLabels();
     unitsChanged();
   });
-  $("#trees").addEventListener("change", (e) => {
-    for (const id of ["#tree_height", "#tree_clearance_a", "#tree_clearance_b"]) $(id).disabled = !e.target.checked;
-  });
+  $$("input[name=tree_mode]").forEach((r) => r.addEventListener("change", () => {
+    syncTreeInputs();
+    updateLookupHint();
+  }));
+  syncTreeInputs();
   for (const key of ["site_a", "site_b"]) {
     $("input[name=name]", siteFieldset(key)).addEventListener("input", () => syncSiteName(key));
     syncSiteName(key);

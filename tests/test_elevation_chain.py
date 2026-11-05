@@ -12,8 +12,9 @@ from fresnelkml.webapi import handle_request
 def test_missing_config_gives_internet_default(tmp_path, monkeypatch):
     monkeypatch.setattr("fresnelkml.config.DEFAULT_CONFIG_PATH", str(tmp_path / "nope.json"))
     cfg = load_config(env={})
-    assert [s["name"] for s in cfg.chain] == ["opentopodata", "open-elevation"]
+    assert [s["name"] for s in cfg.chain] == ["3dep", "opentopodata", "open-elevation"]
     assert cfg.chain[0]["url"] == DEFAULT_CONFIG["elevation"]["chain"][0]["url"]
+    assert [s["name"] for s in cfg.surface.sources] == ["dogami"]
 
 
 def test_explicit_missing_config_is_an_error(tmp_path):

@@ -20,6 +20,7 @@ TOWER_COLOR = "ff0000ff"
 OBSTRUCTION_COLOR = "ff0000ff"
 PROFILE_COLOR = "ff3c8cd2"
 TREE_OBSTRUCTION_COLOR = "ff228b22"
+LIDAR_OBSTRUCTION_COLOR = "ffd27a1e"
 
 
 def _sub(parent: ET.Element, tag: str, text=None, **attrib) -> ET.Element:
@@ -114,12 +115,34 @@ def _link_description(report: LinkReport) -> str:
             f"Min clearance over trees: {trees}",
             f"Tree status: {report.tree_status}",
         ]
+    if report.surface_checked:
+        lines += _surface_lines(report)
     lines += [
         f"k = {opt.k:.4g}, clutter {fmt_height(opt.clutter_m, u)}",
         "Elevation source: " + html.escape(", ".join(report.elevation_sources) or "none (heights given ASL)"),
         f"Zone color: {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",
     ]
     return "<br/>".join(lines)
+
+
+def _surface_lines(report: LinkReport) -> list[str]:
+    opt, u = report.options, report.options.units
+    w = report.surface_worst
+    worst = "n/a"
+    if w is not None and w.clearance is not None:
+        what = f"lidar surface {fmt_height(w.height_m, u)} above ground" if w.lidar else "fixed-height trees"
+        side = f", {fmt_distance(abs(w.offset_m), u, 2)} off the line of sight" if w.offset_m else ""
+        worst = (f"{w.clearance:.2f} \u00d7 r1 ({what}{side}) at {fmt_distance(w.d_m, u, 2)}")
+    sources = ", ".join(report.surface_sources) or "none"
+    return [
+        f"Lidar: {html.escape(sources)}, {100 * (report.surface_coverage or 0):.0f}% coverage, across "
+        f"\u00b1{opt.lidar_width:g} \u00d7 r1, every {fmt_distance(report.surface_spacing_m, u, 1)}; "
+        f"{fmt_height(opt.tree_height_m, u)} trees where there's no lidar",
+        f"Ignored within {fmt_distance(opt.tree_clearance_a_m, u)} of {html.escape(report.site_a.name)} and "
+        f"{fmt_distance(opt.tree_clearance_b_m, u)} of {html.escape(report.site_b.name)}",
+        f"Min clearance over the lidar surface: {worst}",
+        f"Lidar status: {report.surface_status}",
+    ]
 
 
 def _zone_placemark(folder: ET.Element, name: str, style: str, report: LinkReport, radius_attr: str,
@@ -181,6 +204,7 @@ def render_kml(report: LinkReport) -> str:
     _style(doc, "obstruction", icon=OBSTRUCTION_COLOR)
     _style(doc, "profile", line=PROFILE_COLOR, width=2)
     _style(doc, "tree_obstruction", icon=TREE_OBSTRUCTION_COLOR)
+    _style(doc, "lidar_obstruction", icon=LIDAR_OBSTRUCTION_COLOR)
 
     sites = _sub(doc, "Folder")
     _sub(sites, "name", "Sites")
@@ -268,6 +292,23 @@ def render_kml(report: LinkReport) -> str:
             pt = _sub(pm, "Point")
             _sub(pt, "altitudeMode", "absolute")
             _sub(pt, "coordinates", _coord(p.lon, p.lat, p.tree_top_m))
+
+    if report.surface_checked:
+        sf = _sub(doc, "Folder")
+        _sub(sf, "name", f"Lidar check ({report.surface_status})")
+        u = opt.units
+        for p in report.surface_obstructions:
+            pm = _sub(sf, "Placemark")
+            kind = "lidar" if p.lidar else "trees"
+            _sub(pm, "name", f"{kind} c={p.clearance:.2f} @ {fmt_distance(p.d_m, u, 2)}")
+            what = (f"Lidar surface {fmt_height(p.top_m, u)} ({fmt_height(p.height_m, u)} above ground)" if p.lidar
+                    else f"No lidar: {fmt_height(opt.tree_height_m, u)} trees, tops {fmt_height(p.top_m, u)}")
+            side = f", {fmt_distance(abs(p.offset_m), u, 2)} off the line of sight" if p.offset_m else ""
+            _sub(pm, "description", f"{what}{side}, LOS {fmt_height(p.los_m, u)}, r1 {fmt_height(p.r1_m, u, 2)}")
+            _sub(pm, "styleUrl", "#lidar_obstruction" if p.lidar else "#tree_obstruction")
+            pt = _sub(pm, "Point")
+            _sub(pt, "altitudeMode", "absolute")
+            _sub(pt, "coordinates", _coord(p.lon, p.lat, p.top_m))
 
     ET.indent(root, space=" ")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode") + "\n"

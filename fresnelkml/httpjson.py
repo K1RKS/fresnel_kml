@@ -26,17 +26,38 @@ def get_json(url: str, params: dict | None = None, timeout: float = 10.0):
             resp = _requests.get(url, params=params, timeout=timeout, headers={"User-Agent": USER_AGENT})
         except _requests.RequestException as exc:
             raise HttpError(f"{url}: {exc}") from exc
-        if resp.status_code != 200:
-            raise HttpError(f"{url}: HTTP {resp.status_code}")
-        try:
-            return resp.json()
-        except ValueError as exc:
-            raise HttpError(f"{url}: response is not JSON") from exc
+        return _requests_json(url, resp)
 
     full = url
     if params:
         full += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, safe=",|")
-    req = urllib.request.Request(full, headers={"User-Agent": USER_AGENT})
+    return _urllib_json(url, urllib.request.Request(full, headers={"User-Agent": USER_AGENT}), timeout)
+
+
+def post_form_json(url: str, form: dict, timeout: float = 10.0):
+    """POST url with a form-encoded body and return the decoded JSON body."""
+    if _requests is not None:
+        try:
+            resp = _requests.post(url, data=form, timeout=timeout, headers={"User-Agent": USER_AGENT})
+        except _requests.RequestException as exc:
+            raise HttpError(f"{url}: {exc}") from exc
+        return _requests_json(url, resp)
+    body = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={
+        "User-Agent": USER_AGENT, "Content-Type": "application/x-www-form-urlencoded"})
+    return _urllib_json(url, req, timeout)
+
+
+def _requests_json(url: str, resp):
+    if resp.status_code != 200:
+        raise HttpError(f"{url}: HTTP {resp.status_code}")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise HttpError(f"{url}: response is not JSON") from exc
+
+
+def _urllib_json(url: str, req, timeout: float):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read()

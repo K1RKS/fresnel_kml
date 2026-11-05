@@ -1,6 +1,9 @@
 {
   "elevation": {
     "chain": [
+      {"name": "3dep", "type": "arcgis_image",
+       "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer",
+       "units": "m", "timeout_s": 20},
       {"name": "opentopodata", "type": "opentopodata",
        "url": "https://api.opentopodata.org/v1", "datasets": "ned10m,srtm30m",
        "batch": 100, "min_interval_s": 1.0},
@@ -11,6 +14,18 @@
     "timeout_s": 10,
     "retries": 2,
     "cache_dir": "/var/cache/fresnelkml"
+  },
+  "surface": {
+    "sources": [
+      {"name": "dogami", "label": "Oregon DOGAMI lidar",
+       "url": "https://gis.dogami.oregon.gov/arcgis/rest/services/lidar/DIGITAL_SURFACE_MODEL_MOSAIC/ImageServer",
+       "units": "ftUS", "bbox": [-124.8, 41.9, -116.4, 46.4]}
+    ],
+    "spacing_m": 3,
+    "max_points": 25000,
+    "threads": 6,
+    "timeout_s": 20,
+    "time_budget_s": 30
   },
   "map": {
     "tile_servers": [

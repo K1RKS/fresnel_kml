@@ -136,10 +136,11 @@ def parse_options_dict(data) -> tuple[Options, str, list[str]]:
         given = {k: v for k, v in data.items() if k != "tree_clearance_m"}
         data = {**given, **{k: data["tree_clearance_m"] for k in ("tree_clearance_a_m", "tree_clearance_b_m")
                             if given.get(k) is None}}
-    numbers = ("freq_ghz", "k", "clutter_m", "tree_height_m", "tree_clearance_a_m", "tree_clearance_b_m")
+    numbers = ("freq_ghz", "k", "clutter_m", "tree_height_m", "tree_clearance_a_m", "tree_clearance_b_m",
+               "lidar_width")
     lengths = ("clutter_m", "tree_height_m", "tree_clearance_a_m", "tree_clearance_b_m")  # feet when units is "ft"
     integers = ("zone", "stations", "ring_points", "ring_every")
-    strings = ("elev_source", "style", "mode", "color", "coord_display")
+    strings = ("elev_source", "style", "mode", "color", "coord_display", "tree_source")
     for key in numbers:
         if data.get(key) is not None:
             value = _number(data[key], f"options.{key}")

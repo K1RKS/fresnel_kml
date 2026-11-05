@@ -128,6 +128,8 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg-dot.tree { background: none; border: 2px solid #b02a37; width: 6px; height: 6px; }
 .lg-trees { display: inline-block; width: 18px; height: 10px; background: rgba(34, 139, 34, 0.2); border-top: 1px solid rgba(34, 139, 34, 0.6); margin-right: 4px; vertical-align: middle; }
 .profile-plot .trees { fill: rgba(34, 139, 34, 0.2); stroke: rgba(34, 139, 34, 0.6); stroke-width: 1; }
+.lg-lidar { display: inline-block; width: 18px; height: 10px; background: rgba(30, 122, 210, 0.25); border-top: 1px solid rgba(30, 122, 210, 0.8); margin-right: 4px; vertical-align: middle; }
+.profile-plot .lidar { fill: rgba(30, 122, 210, 0.25); stroke: rgba(30, 122, 210, 0.8); stroke-width: 1; }
 .profile-plot .tree-obstruction { fill: none; stroke: #b02a37; stroke-width: 2; }
 .trees-row { margin-top: 4px; }
 #map { height: 440px; border: 1px solid var(--line); border-radius: 6px; }
@@ -135,6 +137,8 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg.zone-fill { height: 10px; background: rgba(0, 200, 0, 0.35); border: 1px solid #2b8a3e; }
 .lg.sixty-fill { height: 10px; background: rgba(255, 165, 0, 0.3); border: 1px solid #e8590c; }
 .trees-row input:disabled { opacity: 0.5; }
+.tree-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.tree-mode label.disabled { opacity: 0.5; }
 
 .api-doc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px 16px 12px; margin-bottom: 24px; }
 .api-doc pre { background: #f0f2f5; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 0.82rem; }

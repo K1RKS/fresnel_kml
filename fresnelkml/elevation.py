@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 
 from . import httpjson
+from .arcgis import ImageService, ImageServiceError
 
 try:
     import fcntl
@@ -50,6 +51,7 @@ class ElevationProvider:
     type = "base"
     batch = 100
     min_interval_s = 0.0
+    retries: int | None = None  # None: use the chain's setting
 
     def __init__(self, name: str):
         self.name = name
@@ -196,6 +198,25 @@ class GoogleProvider(ElevationProvider):
         return [(float(item["elevation"]), self.name) for item in results]
 
 
+class ArcGISImageProvider(ElevationProvider):
+    """Bare-earth elevation from an ArcGIS image service, such as USGS 3DEP."""
+    type = "arcgis_image"
+
+    def __init__(self, name: str, url: str, units: str = "m", batch: int = 1000, retries: int = 0,
+                 timeout_s: float = 25.0):
+        super().__init__(name)
+        self.service = ImageService(url, units, timeout_s, interpolation="RSP_BilinearInterpolation", chunk=batch)
+        self.batch = self.service.chunk
+        self.retries = retries
+
+    def fetch(self, points):
+        try:
+            values = self.service.sample_batch(points)
+        except ImageServiceError as exc:
+            raise ElevationError(f"{self.name}: {exc}") from exc
+        return [MISSING if v is None else (v, self.name) for v in values]
+
+
 # --------------------------------------------------------------------------
 # Throttle and cache
 # --------------------------------------------------------------------------
@@ -285,7 +306,8 @@ class ElevationChain:
 
     def _fetch_with_retries(self, provider: ElevationProvider, batch: list[Point]) -> list:
         last = None
-        for attempt in range(self.retries + 1):
+        retries = self.retries if provider.retries is None else provider.retries
+        for attempt in range(retries + 1):
             wait_turn(provider.name, provider.min_interval_s)
             try:
                 result = provider.fetch(batch)
@@ -294,7 +316,7 @@ class ElevationChain:
                 return result
             except ElevationError as exc:
                 last = exc
-                if attempt < self.retries:
+                if attempt < retries:
                     _sleep(0.5 * (attempt + 1))
         raise last
 
