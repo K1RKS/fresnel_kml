@@ -176,10 +176,16 @@ function refreshOverrides(key) {
     text = meshNodes.length ? `${node.name} is no longer in the feed; using the saved values.`
       : `The node feed is unavailable; using the saved values for ${node.name}.`;
   }
-  if (!hasHeight(node)) text += " No antenna height in the feed; enter it.";
-  else if (!("height_m" in s.ov)) text += heightNote(node, s.ov.height_ref === "asl");
-  if (changed.length) text += ` Changed from ${node.name}: ${changed.join(", ")}. Clear a field or set it back to restore it.`;
   note.textContent = text;
+  const issue = !hasHeight(node) ? " No antenna height in the feed; enter it."
+    : "height_m" in s.ov ? "" : heightNote(node, s.ov.height_ref === "asl");
+  if (issue) {
+    const span = document.createElement("span");
+    span.className = "issue";
+    span.textContent = issue;
+    note.append(span);
+  }
+  if (changed.length) note.append(` Changed from ${node.name}: ${changed.join(", ")}. Clear a field or set it back to restore it.`);
 }
 
 function heightNote(node, asl) {

@@ -103,7 +103,7 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .swatch-box { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
 #swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--line); display: inline-block; }
 .warnings { color: var(--marginal); font-size: 0.88rem; padding-left: 20px; }
-.warnings .issue { color: var(--blocked); font-weight: 600; }
+.warnings .issue, .node-note .issue { color: var(--blocked); font-weight: 600; }
 .plot-title { margin: 14px 0 4px; font-size: 0.92rem; font-weight: 600; }
 .profile-plot { display: block; width: 100%; height: auto; background: #fbfcfd; border: 1px solid var(--line); border-radius: 6px; }
 .profile-plot .ground { fill: #d8c9a8; stroke: #8a6d3b; stroke-width: 1; }
