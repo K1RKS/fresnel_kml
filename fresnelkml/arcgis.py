@@ -77,17 +77,17 @@ class ImageService:
         return out
 
     def sample(self, points: list[Point], *, threads: int = 4, deadline: float | None = None,
-               cache=None, cache_name: str | None = None, progress=None) -> SampleResult:
+               cache=None, progress=None) -> SampleResult:
         """Sample any number of points, in parallel batches, until `deadline` (time.monotonic()).
 
-        `progress(done, total)` is called with point counts as batches finish (from worker threads).
+        `cache` is a cache.PointCache (or None). `progress(done, total)` is called with point counts as
+        batches finish (from worker threads).
         """
         values: list[float | None] = [None] * len(points)
         todo = list(range(len(points)))
-        if cache is not None and cache_name:
+        if cache is not None:
             todo = []
-            for i, p in enumerate(points):
-                hit = cache.get(cache_name, p)
+            for i, hit in enumerate(cache.get_many(points)):
                 if hit is None:
                     todo.append(i)
                 else:
@@ -115,6 +115,7 @@ class ImageService:
                         progress(done[0], len(points))
 
         outcomes = run_parallel([lambda b=b: task(b) for b in batches], threads, deadline)
+        fresh = []
         for batch, outcome in zip(batches, outcomes):
             if outcome is None or isinstance(outcome, TimeoutError):
                 result.timed_out += len(batch)
@@ -124,13 +125,10 @@ class ImageService:
             else:
                 for i, v in zip(batch, outcome):
                     values[i] = v
-                    if v is not None and cache is not None and cache_name:
-                        cache.put(cache_name, points[i], (v, cache_name))
-        if cache is not None and cache_name:
-            try:
-                cache.commit()
-            except Exception:  # noqa: BLE001 - a cache we can't write only costs a refetch
-                pass
+                    if v is not None:
+                        fresh.append((points[i], v, cache.name if cache is not None else ""))
+        if cache is not None:
+            cache.put_many(fresh)
         return result
 
 

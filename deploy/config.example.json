@@ -12,8 +12,13 @@
        "datasets": "srtm30m", "batch": 500, "min_interval_s": 0}
     ],
     "timeout_s": 10,
-    "retries": 2,
-    "cache_dir": "/var/cache/fresnelkml"
+    "retries": 2
+  },
+  "cache": {
+    "dir": "/var/cache/fresnelkml",
+    "max_mb": 1024,
+    "types": {"local_hgt": 0},
+    "services": {"3dep": 2048, "dogami": 4096}
   },
   "surface": {
     "sources": [
@@ -31,10 +36,10 @@
     "tile_servers": [
       {"name": "OpenStreetMap", "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
        "attribution": "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors",
-       "max_zoom": 19},
+       "max_zoom": 19, "cache_mb": 1024},
       {"name": "OpenTopoMap", "url": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
        "attribution": "&copy; OpenStreetMap contributors, SRTM | style &copy; OpenTopoMap (CC-BY-SA)",
-       "max_zoom": 17},
+       "max_zoom": 17, "cache_mb": 512},
       {"name": "AREDN K1RKS", "url": "//k1rks-tileserver-world.local.mesh/hot/{z}/{x}/{y}.png",
        "attribution": "&copy; OpenStreetMap contributors", "max_zoom": 19}
     ],

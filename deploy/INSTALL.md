@@ -24,7 +24,13 @@ Copy the blocks from [nginx-fresnel.conf](nginx-fresnel.conf) into your site's `
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-The `location /site/lib/ { deny all; }` block stops NGINX from serving the Python code as files.
+The `location /site/lib/ { deny all; }` block stops NGINX from serving the Python code as files. The `fastcgi_param NO_BUFFERING 1;` line makes Debian/Ubuntu's fcgiwrap pass the page's progress lines on as they're written; without it the progress bar only moves at the end.
+
+Recommended: create the lookup cache folder, which turns on caching of elevation and lidar lookups (see [section 7](#7-optional-local-cache)):
+
+```bash
+sudo install -d -o www-data -g www-data /var/cache/fresnelkml
+```
 
 ## 3. Install or upgrade the folder
 
@@ -71,12 +77,7 @@ With no config file, the server looks up ground elevation from the USGS 3DEP ima
   Oregon and Washington together are 63 tiles, about 1.6 GB uncompressed (about 650 MB with `--keep-gz`, but lookups are slower). The download can run on another machine; copy the folder over afterwards.
 
 - For fully offline use, make the chain only the `local_hgt` entry, or only a LAN OpenTopoData entry.
-- `cache_dir` caches lookups on disk, including lidar samples, so running the same link again is much faster. Recommended. Create it and make it writable by `www-data`:
-
-  ```bash
-  sudo install -d -o www-data -g www-data /var/cache/fresnelkml
-  ```
-
+- Lookups are cached on disk when `/var/cache/fresnelkml` exists; see [section 7](#7-optional-local-cache).
 - A config file in another place can be selected with `fastcgi_param FRESNEL_CONFIG /path/config.json;`.
 
 ### Lidar surface sources
@@ -101,7 +102,7 @@ The page's "Along the path: LIDAR" choice samples highest-hit surface models (tr
 
 ## 5. Optional: map tile servers
 
-The page's map is drawn with Leaflet, which ships inside the folder (`assets/leaflet/`, BSD 2-Clause licence). If your NGINX config denies paths such as `/assets/`, allow them for this folder, or the map won't load. The map tiles come from the tile servers listed under `map` in the same `/etc/fresnelkml/config.json`. Without a `map` section, the page offers OpenStreetMap (the default) and OpenTopoMap. To use your own or an AREDN tileserver, list it, and make it the default if you like:
+The page's map is drawn with Leaflet, which ships inside the folder (`assets/leaflet/`, BSD 2-Clause licence). If your NGINX config denies paths such as `/assets/`, allow them for this folder, or the map won't load. The map tiles come from the tile servers listed under `map` in the same `/etc/fresnelkml/config.json`. Without a `map` section, the page offers OpenStreetMap (the default), OpenTopoMap, and two satellite views: Satellite (Esri), worldwide and sharp to zoom 19 (Esri's World Imagery; fine for light, non-commercial use with the attribution shown, see [Esri's terms](https://www.esri.com/en-us/legal/terms/full-master-agreement)), and Satellite (USGS), public-domain US imagery that goes to zoom 16 and is stretched beyond that (`max_native_zoom`). To use your own or an AREDN tileserver, list it, and make it the default if you like:
 
 ```json
 "map": {
@@ -115,7 +116,7 @@ The page's map is drawn with Leaflet, which ships inside the folder (`assets/lea
 }
 ```
 
-Each entry needs `name` and a `url` containing `{z}`, `{x}` and `{y}`. `{s}` with an optional `subdomains` string, `attribution` (HTML) and `max_zoom` are optional. The browser fetches tiles directly, so a `//host/...` URL follows the page's own http or https, and the page's user must be able to reach that host. `GET api/fresnel.cgi?map` shows what the page will use. The public OpenStreetMap servers are fine for light use under their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/); for heavy use, point this at your own tileserver.
+Each entry needs `name` and a `url` containing `{z}`, `{x}` and `{y}` (in any order; ArcGIS tile services use `{z}/{y}/{x}`). `{s}` with an optional `subdomains` string, `attribution` (HTML), `max_zoom`, `max_native_zoom` (the deepest zoom the server has; the map stretches its tiles past it) and `cache_mb` are optional. The browser fetches tiles directly, so a `//host/...` URL follows the page's own http or https, and the page's user must be able to reach that host. `GET api/fresnel.cgi?map` shows what the page will use. The public OpenStreetMap servers are fine for light use under their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/); for heavy use, point this at your own tileserver.
 
 The public OpenTopoData limits (1 request/s, 1000/day) are shared by everyone using your server. The service already spaces requests out across concurrent users, and the commented `limit_req` lines in the NGINX snippet can cap how often each client may call the API.
 
@@ -136,13 +137,54 @@ The page's "Mesh node" picker fills Site A and Site B from [Nodographer](https:/
 
 - The server fetches the feeds itself, so the browser doesn't need to reach them and the feed host needs no CORS headers. A `*.local.mesh` feed works when the server is on the mesh. Only the URLs in this file are ever fetched.
 - When the same node appears in more than one feed, the first feed in the list wins.
-- Each feed is cached for `cache_ttl_s` seconds (default 300) in `elevation.cache_dir`, or in the system temp directory when that isn't set. If a feed can't be fetched, the last cached copy is used and the page shows a warning.
+- Each feed is cached for `cache_ttl_s` seconds (default 300) in the cache folder (`cache.dir`), or in the system temp directory when there isn't one. If a feed can't be fetched, the last cached copy is used and the page shows a warning.
 - `timeout_s` defaults to `elevation.timeout_s`.
 - `"feeds": []` turns the picker off.
 
 `GET api/fresnel.cgi?nodes` shows what the page will get.
 
 Antenna heights and frequencies only come from feeds generated by Nodographer `330032d` or later. Older feeds still fill the name and position, and the height is left for you to enter.
+
+## 7. Optional: local cache
+
+The server can keep what it looks up from elevation and lidar services, so a link checked before comes back much faster. Each service has its own SQLite file in `<cache folder>/points/` and its own size limit (1 GB by default); the least recently used points go first. The README's [Local cache](../README.md#local-cache) section explains it in full.
+
+1. Turn it on by creating the default folder (no restart needed):
+
+   ```bash
+   sudo install -d -o www-data -g www-data /var/cache/fresnelkml
+   ```
+
+2. Optionally, change the folder or the sizes in `/etc/fresnelkml/config.json`:
+
+   ```json
+   "cache": {
+     "dir": "/var/cache/fresnelkml",
+     "max_mb": 1024,
+     "types": {"opentopodata": 256},
+     "services": {"3dep": 2048, "dogami": 4096}
+   }
+   ```
+
+   A service's limit is its `services` entry (by source name), else its `types` entry (lidar sources are type `surface`), else `max_mb`; `0` turns caching off for it, and `"dir": null` turns it all off. The old `elevation.cache_dir` setting still works; the `elevation.sqlite` file it used to hold is no longer read and can be deleted.
+
+3. Check it, as the web server user so the files keep their owner:
+
+   ```bash
+   sudo -u www-data python3 tools/cache_admin.py stats --config /etc/fresnelkml/config.json
+   ```
+
+   `prune` applies the limits now and `clear [--service NAME]` empties a cache.
+
+### Map tiles
+
+Map tiles can be cached by NGINX. Give each tile server to cache a `"cache_mb"` in `map.tile_servers` (see [section 5](#5-optional-map-tile-servers)); the page then loads its tiles through `<site>/tiles/<slug>/`. Print the matching NGINX settings for your site path and add them:
+
+```bash
+python3 tools/tile_cache_conf.py --config /etc/fresnelkml/config.json --site /site/
+```
+
+The first part (`proxy_cache_path` lines, one zone and size limit per tile server) goes in the `http { }` block, for example in `/etc/nginx/conf.d/fresnelkml-tiles.conf`; the `location` blocks go in the site's `server { }` block. Then `sudo nginx -t && sudo systemctl reload nginx`. NGINX creates the cache folders under `/var/cache/nginx/fresnelkml/` itself. A repeated tile request should show `X-Cache-Status: HIT`. Don't cache a tile server that only the browser can reach, such as a `*.local.mesh` tileserver when the web server is off the mesh.
 
 ## Troubleshooting
 

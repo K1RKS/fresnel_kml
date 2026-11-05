@@ -45,7 +45,7 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Height**: exactly one of `agl_m` (above ground; the ground is looked up) or `asl_m` (above sea level; no lookup needed). `ground_m` overrides the lookup.
 - **Options** (all optional): `freq_ghz`, `zone`, `sixty`, `k`, `clutter_m`, `elev_source`, `stations`, `ring_points`, `style` (`mesh`/`rings`), `ring_every`, `terrain_check` (`true`/`false`/`null` = only when a lookup is needed anyway), `mode` (`absolute`/`relative`), `units` (`m`/`ft`), `color` (`random`, `#RRGGBB`, `#RRGGBBAA` or a name), `coord_display` (`decimal`/`dms`/`ddm`), `trees` (`true` to check obstructions above the ground), `tree_source` (`fixed` or `lidar`), `lidar_width` (0 to 1, default 0.6), `tree_height_m`, `tree_clearance_a_m` and `tree_clearance_b_m` (or `tree_clearance_m` for both). See [Trees and lidar](#trees-and-lidar).
 - **Response**: the KML file as a download, or `{"kml", "report", "warnings"}` with `"format": "json"`. Errors are JSON `{"error", "field"}` with status 400, 405, 413, 502 (no elevation available) or 504.
-- **Progress** (what the web page uses): add `"progress": true` (with `"format": "json"`) and the response is `application/x-ndjson`, one JSON object per line as the work happens: `{"progress": {"stage", "done", "total"}}` for the stages `start`, `ground`, `lidar` (samples done of total) and `report`, then `{"result": {"kml", "report", "warnings"}}` or `{"error", "field", "status"}`. The response carries `X-Accel-Buffering: no` so NGINX passes each line straight through.
+- **Progress** (what the web page uses): add `"progress": true` (with `"format": "json"`) and the response is `application/x-ndjson`, one JSON object per line as the work happens: `{"progress": {"stage", "done", "total"}}` for the stages `start`, `ground`, `lidar` (samples done of total) and `report`, then `{"result": {"kml", "report", "warnings"}}` or `{"error", "field", "status"}`. The response carries `X-Accel-Buffering: no` so NGINX passes each line straight through; fcgiwrap also needs `fastcgi_param NO_BUFFERING 1;` in the API's `location` (see [deploy/nginx-fresnel.conf](deploy/nginx-fresnel.conf)), or it holds the lines back until the result.
 - `GET ?sources` lists the configured elevation sources and lidar surface sources (`surface`); `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
 - `GET ?ground&lat=LAT&lon=LON` (or `&position=TEXT`, plus an optional `&source=NAME`) looks up the ground elevation at one point and returns `{"lat", "lon", "ground_m", "source", "assumed_zero"}`.
 - `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
@@ -69,7 +69,7 @@ For picked nodes that report an antenna azimuth, the result adds an "Antenna aim
 
 ### Map
 
-The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. Tiles can be cached on your server; see [Local cache](#local-cache) and [deploy/INSTALL.md](deploy/INSTALL.md).
+The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the layer menu also offers OpenTopoMap and two satellite views (Esri World Imagery, and public-domain USGS imagery for the US). The `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. Tiles can be cached on your server; see [Local cache](#local-cache) and [deploy/INSTALL.md](deploy/INSTALL.md).
 
 ### Elevation sources
 
@@ -91,7 +91,7 @@ The server can keep a local copy of everything it looks up from outside services
 
 - **Ground elevations** from each elevation source (USGS 3DEP, OpenTopoData, Open-Elevation, USGS point query, Google).
 - **Lidar surface samples** from each lidar source (Oregon DOGAMI by default).
-- **Map tiles** from each tile server you choose (OpenStreetMap, OpenTopoMap), cached by NGINX.
+- **Map tiles** from each tile server you choose (OpenStreetMap, OpenTopoMap, the satellite views), cached by NGINX.
 
 Each service has its own cache with its own size limit, 1 GB by default. When a cache is full, the entries used least recently are removed first.
 

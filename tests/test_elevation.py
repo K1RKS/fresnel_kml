@@ -1,8 +1,9 @@
 import pytest
 
 from fresnelkml import Options, Site, analyze, elevation, httpjson
+from fresnelkml.cache import CacheSet
 from fresnelkml.elevation import (MISSING, ElevationChain, ElevationError, ElevationUnavailable,
-                                  OpenElevationProvider, OpenTopoDataProvider, USGSProvider, open_cache)
+                                  OpenElevationProvider, OpenTopoDataProvider, USGSProvider)
 
 from conftest import FakeProvider
 
@@ -84,11 +85,11 @@ def test_missing_everywhere_raises():
 
 
 def test_cache_avoids_second_fetch(tmp_path):
-    cache = open_cache(str(tmp_path))
     p = FakeProvider(func=lambda lat, lon: 7.0)
-    ElevationChain([p], cache=cache).lookup([(1.0, 1.0)])
-    ElevationChain([p], cache=open_cache(str(tmp_path))).lookup([(1.0, 1.0)])
+    ElevationChain([p], caches=CacheSet(str(tmp_path))).lookup([(1.0, 1.0)])
+    again = ElevationChain([p], caches=CacheSet(str(tmp_path))).lookup([(1.0, 1.0)])
     assert len(p.calls) == 1
+    assert (again[0].elevation, again[0].source) == (7.0, "fake")
 
 
 def test_throttle_waits(monkeypatch, tmp_path):

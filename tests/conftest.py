@@ -52,6 +52,8 @@ def no_network_or_sleep(monkeypatch):
 
     monkeypatch.setattr(httpjson, "get_json", blocked)
     monkeypatch.setattr(httpjson, "post_form_json", blocked)
+    # a real /var/cache/fresnelkml on the test machine must never be used
+    monkeypatch.setattr("fresnelkml.cache.DEFAULT_DIR", "/nonexistent/fresnelkml-cache")
     monkeypatch.setattr(elevation, "_sleep", lambda s: None)
     monkeypatch.setenv("FRESNEL_CONFIG", "")
 
@@ -88,5 +90,6 @@ def tile_dir(tmp_path_factory):
 @pytest.fixture
 def local_config(tmp_path, tile_dir):
     path = tmp_path / "config.json"
-    path.write_text('{"elevation": {"chain": [{"name": "local", "type": "local_hgt", "path": "%s"}]}}' % tile_dir)
+    path.write_text('{"elevation": {"chain": [{"name": "local", "type": "local_hgt", "path": "%s"}]}, '
+                    '"cache": {"dir": null}}' % tile_dir)
     return str(path)

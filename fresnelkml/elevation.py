@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 import tempfile
 import time
 from dataclasses import dataclass
@@ -249,51 +248,20 @@ def wait_turn(key: str, min_interval_s: float) -> None:
         fh.flush()
 
 
-class ElevationCache:
-    def __init__(self, directory: str):
-        self.path = os.path.join(directory, "elevation.sqlite")
-        self._db = sqlite3.connect(self.path, timeout=5)
-        self._db.execute("CREATE TABLE IF NOT EXISTS elev (key TEXT PRIMARY KEY, elevation REAL, source TEXT)")
-        self._db.commit()
-
-    @staticmethod
-    def _key(name: str, point: Point) -> str:
-        return f"{name}|{point[0]:.5f}|{point[1]:.5f}"
-
-    def get(self, name: str, point: Point):
-        row = self._db.execute("SELECT elevation, source FROM elev WHERE key = ?",
-                               (self._key(name, point),)).fetchone()
-        return (row[0], row[1]) if row else None
-
-    def put(self, name: str, point: Point, value: tuple[float, str]) -> None:
-        self._db.execute("INSERT OR REPLACE INTO elev VALUES (?, ?, ?)",
-                         (self._key(name, point), value[0], value[1]))
-
-    def commit(self) -> None:
-        self._db.commit()
-
-
-def open_cache(directory: str | None) -> ElevationCache | None:
-    if not directory:
-        return None
-    try:
-        os.makedirs(directory, exist_ok=True)
-        return ElevationCache(directory)
-    except (OSError, sqlite3.Error):
-        return None
-
-
 # --------------------------------------------------------------------------
 # Chain
 # --------------------------------------------------------------------------
 
 class ElevationChain:
-    def __init__(self, providers: list[ElevationProvider], retries: int = 2,
-                 cache: ElevationCache | None = None):
+    def __init__(self, providers: list[ElevationProvider], retries: int = 2, caches=None):
+        """`caches` is a cache.CacheSet (or None): each provider gets its own size-limited cache."""
         self.providers = list(providers)
         self.retries = retries
-        self.cache = cache
+        self.caches = caches
         self.errors: list[str] = []
+
+    def _cache(self, provider: ElevationProvider):
+        return self.caches.for_service(provider.name, provider.type) if self.caches else None
 
     def describe(self) -> list[dict]:
         return [p.describe() for p in self.providers]
@@ -302,7 +270,7 @@ class ElevationChain:
         matches = [p for p in self.providers if p.name == name]
         if not matches:
             raise KeyError(name)
-        return ElevationChain(matches, self.retries, self.cache)
+        return ElevationChain(matches, self.retries, self.caches)
 
     def _fetch_with_retries(self, provider: ElevationProvider, batch: list[Point]) -> list:
         last = None
@@ -329,12 +297,14 @@ class ElevationChain:
                 break
             still = []
             fetch_idx = []
-            for i in pending:
-                cached = self.cache.get(provider.name, points[i]) if self.cache else None
+            cache = self._cache(provider)
+            hits = cache.get_many([points[i] for i in pending]) if cache else [None] * len(pending)
+            for i, cached in zip(pending, hits):
                 if cached is not None:
                     results[i] = ElevationResult(cached[0], cached[1])
                 else:
                     fetch_idx.append(i)
+            fresh = []
             failed = False
             for start in range(0, len(fetch_idx), max(1, provider.batch)):
                 chunk = fetch_idx[start:start + max(1, provider.batch)]
@@ -356,14 +326,10 @@ class ElevationChain:
                         still.append(i)
                     else:
                         results[i] = ElevationResult(float(value[0]), value[1])
-                        if self.cache:
-                            self.cache.put(provider.name, points[i], value)
+                        fresh.append((points[i], float(value[0]), value[1]))
+            if cache:
+                cache.put_many(fresh)
             pending = sorted(still)
-        if self.cache:
-            try:
-                self.cache.commit()
-            except sqlite3.Error:
-                pass
 
         unavailable = []
         for i in pending:

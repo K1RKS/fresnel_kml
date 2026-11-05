@@ -420,6 +420,7 @@ function ensureMap() {
   for (const s of (mapConfig && mapConfig.tile_servers) || []) {
     const opts = { maxZoom: s.max_zoom || 19, attribution: s.attribution || "" };
     if (s.subdomains) opts.subdomains = s.subdomains;
+    if (s.max_native_zoom) opts.maxNativeZoom = s.max_native_zoom;
     bases[s.name] = L.tileLayer(s.url, opts);
   }
   const first = bases[mapConfig && mapConfig.default] || Object.values(bases)[0];

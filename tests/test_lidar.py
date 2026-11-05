@@ -68,18 +68,18 @@ def test_sample_batch_errors(monkeypatch):
 
 
 def test_sample_chunks_and_cache(monkeypatch, tmp_path):
-    from fresnelkml.elevation import open_cache
+    from fresnelkml.cache import CacheSet
     calls = []
     monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: [lat for lat, _ in pts], calls))
     svc = ImageService("https://example.test/ImageServer")
     pts = [(i * 0.001, 0.0) for i in range(2500)]
-    cache = open_cache(str(tmp_path))
-    res = svc.sample(pts, threads=3, cache=cache, cache_name="t")
+    cache = CacheSet(str(tmp_path)).for_service("t", "surface")
+    res = svc.sample(pts, threads=3, cache=cache)
     assert sorted(n for _, n, _ in calls) == [500, 1000, 1000]
     assert res.values == pytest.approx([p[0] for p in pts])
     assert res.failed == res.timed_out == 0
     calls.clear()
-    again = svc.sample(pts[:10] + [(9.0, 9.0)], cache=cache, cache_name="t")
+    again = svc.sample(pts[:10] + [(9.0, 9.0)], cache=cache)
     assert [n for _, n, _ in calls] == [1]  # only the new point is fetched
     assert again.values[:10] == pytest.approx([p[0] for p in pts[:10]])
 

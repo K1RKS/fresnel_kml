@@ -14,6 +14,17 @@ def test_default_tile_servers(tmp_path, monkeypatch):
     assert m["default"] == "OpenStreetMap"
     assert m["tile_servers"][0]["url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     assert "OpenStreetMap" in m["tile_servers"][0]["attribution"]
+    names = [s["name"] for s in m["tile_servers"]]
+    assert names == ["OpenStreetMap", "OpenTopoMap", "Satellite (Esri)", "Satellite (USGS)"]
+    usgs = m["tile_servers"][3]
+    assert usgs["url"].endswith("/tile/{z}/{y}/{x}") and usgs["max_native_zoom"] == 16 and usgs["max_zoom"] == 19
+
+
+@pytest.mark.parametrize("native", [0, 20, True, "16"])
+def test_bad_max_native_zoom(native):
+    with pytest.raises(ConfigError):
+        parse_config({"map": {"tile_servers": [{"name": "x", "url": "https://t/{z}/{x}/{y}.png", "max_zoom": 19,
+                                                "max_native_zoom": native}]}})
 
 
 def test_elevation_only_config_keeps_default_map():

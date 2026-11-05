@@ -7,9 +7,11 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from . import cache as cache_mod
 from .arcgis import UNIT_SCALE
+from .cache import DEFAULT_MAX_MB, CacheSet, slug
 from .elevation import (ArcGISImageProvider, ElevationChain, GoogleProvider, OpenElevationProvider,
-                        OpenTopoDataProvider, USGSProvider, open_cache)
+                        OpenTopoDataProvider, USGSProvider)
 from .local_hgt import LocalHgtProvider
 
 DEFAULT_CONFIG_PATH = "/etc/fresnelkml/config.json"
@@ -41,6 +43,16 @@ DEFAULT_CONFIG = {
                             "contributors, SRTM | style &copy; <a href=\"https://opentopomap.org\">OpenTopoMap</a> "
                             "(CC-BY-SA)",
              "max_zoom": 17},
+            {"name": "Satellite (Esri)",
+             "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+             "attribution": "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, USDA, USGS, "
+                            "and the GIS User Community",
+             "max_zoom": 19},
+            {"name": "Satellite (USGS)",
+             "url": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+             "attribution": "Imagery: <a href=\"https://www.usgs.gov/programs/national-geospatial-program/"
+                            "national-map\">USGS The National Map</a> (public domain, US only)",
+             "max_zoom": 19, "max_native_zoom": 16},
         ],
         "default": "OpenStreetMap",
     },
@@ -86,11 +98,20 @@ class SurfaceConfig:
 
 
 @dataclass
+class CacheConfig:
+    """The local lookup cache: its folder (None: off) and the size limit for each service in MB."""
+    dir: str | None = None
+    max_mb: float = DEFAULT_MAX_MB
+    types: dict = field(default_factory=dict)
+    services: dict = field(default_factory=dict)
+
+
+@dataclass
 class Config:
     chain: list[dict] = field(default_factory=list)
     timeout_s: float = 10.0
     retries: int = 2
-    cache_dir: str | None = None
+    cache: CacheConfig = field(default_factory=lambda: _parse_cache(None))
     path: str | None = None
     tile_servers: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["map"]["tile_servers"]))
     default_tile_server: str | None = DEFAULT_CONFIG["map"]["default"]
@@ -105,12 +126,34 @@ class Config:
     def public_sources(self) -> list[dict]:
         return [{"name": s["name"], "type": s["type"]} for s in self.chain]
 
+    @property
+    def cache_dir(self) -> str | None:
+        return self.cache.dir
+
     def public_map(self) -> dict:
-        """Tile servers for the web page. Browsers fetch tiles directly, so the URLs are public."""
-        return {"tile_servers": self.tile_servers, "default": self.default_tile_server}
+        """Tile servers for the web page. Browsers fetch tiles directly, so the URLs are public; servers
+        with a cache_mb are fetched through this site instead (tiles/<slug>/...), where NGINX caches them."""
+        servers = []
+        for s in self.tile_servers:
+            out = {k: v for k, v in s.items() if k != "cache_mb"}
+            if s.get("cache_mb"):
+                out["url"] = f"tiles/{slug(s['name'])}/{tile_proxy(s)[1]}"
+                out.pop("subdomains", None)
+            servers.append(out)
+        return {"tile_servers": servers, "default": self.default_tile_server}
 
 
-_TILE_KEYS = {"name", "url", "attribution", "max_zoom", "subdomains"}
+def tile_proxy(server: dict) -> tuple[str, str]:
+    """(upstream base URL ending in "/", the rest of the template from the first {z}/{x}/{y} on)."""
+    url = server["url"]
+    if url.startswith("//"):
+        url = "https:" + url
+    url = url.replace("{s}", (server.get("subdomains") or "a")[0])
+    first = min(url.index(token) for token in ("{z}", "{x}", "{y}"))
+    return url[:first], url[first:]
+
+
+_TILE_KEYS = {"name", "url", "attribution", "max_zoom", "max_native_zoom", "subdomains", "cache_mb"}
 
 
 def _validate_tile_server(entry, index: int) -> dict:
@@ -133,10 +176,25 @@ def _validate_tile_server(entry, index: int) -> dict:
         raise ConfigError(f"{where}.attribution must be a string")
     if not isinstance(out["max_zoom"], int) or not 1 <= out["max_zoom"] <= 24:
         raise ConfigError(f"{where}.max_zoom must be an integer from 1 to 24")
+    if "max_native_zoom" in entry:  # the deepest zoom the server has; the map stretches its tiles beyond it
+        native = entry["max_native_zoom"]
+        if isinstance(native, bool) or not isinstance(native, int) or not 1 <= native <= out["max_zoom"]:
+            raise ConfigError(f"{where}.max_native_zoom must be an integer from 1 to max_zoom")
+        out["max_native_zoom"] = native
     if "subdomains" in entry:
         if not isinstance(entry["subdomains"], str) or not entry["subdomains"]:
             raise ConfigError(f"{where}.subdomains must be a string such as \"abc\"")
         out["subdomains"] = entry["subdomains"]
+    if "cache_mb" in entry:
+        mb = entry["cache_mb"]
+        if isinstance(mb, bool) or not isinstance(mb, (int, float)) or mb < 0:
+            raise ConfigError(f"{where}.cache_mb must be a number of MB (0 for no cache)")
+        if mb:
+            base, _ = tile_proxy(out)
+            if not base.endswith("/") or base.count("/") < 3:
+                raise ConfigError(f"{where}.url needs {{z}}/{{x}}/{{y}} in its path to be cached "
+                                  "(such as https://host/{z}/{x}/{y}.png)")
+            out["cache_mb"] = mb
     return out
 
 
@@ -199,6 +257,38 @@ def _parse_nodes(data) -> tuple[list[dict], float, float | None]:
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
         raise ConfigError("nodes.timeout_s must be a positive number")
     return feeds, float(ttl), (float(timeout) if timeout is not None else None)
+
+
+_CACHE_KEYS = {"dir", "max_mb", "types", "services"}
+
+
+def _megabytes(value, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ConfigError(f"{where} must be a number of MB (0 for no cache)")
+    return float(value)
+
+
+def _parse_cache(data, legacy_dir: str | None = None) -> CacheConfig:
+    """The cache folder is cache.dir, else the old elevation.cache_dir, else DEFAULT_DIR when it's writable."""
+    data = {} if data is None else data
+    if not isinstance(data, dict):
+        raise ConfigError("'cache' must be an object")
+    unknown = set(data) - _CACHE_KEYS
+    if unknown:
+        raise ConfigError(f"cache has unknown key(s): {', '.join(sorted(unknown))}")
+    if "dir" in data:
+        directory = data["dir"]
+        if directory is not None and (not isinstance(directory, str) or not directory):
+            raise ConfigError("cache.dir must be a folder path or null")
+    else:
+        directory = legacy_dir or default_cache_dir()
+    out = CacheConfig(directory, _megabytes(data.get("max_mb", DEFAULT_MAX_MB), "cache.max_mb"))
+    for key in ("types", "services"):
+        raw = data.get(key, {})
+        if not isinstance(raw, dict):
+            raise ConfigError(f"cache.{key} must be an object of name: MB")
+        setattr(out, key, {str(k): _megabytes(v, f"cache.{key}.{k}") for k, v in raw.items()})
+    return out
 
 
 _SURFACE_KEYS = {"sources", "spacing_m", "max_points", "threads", "timeout_s", "time_budget_s"}
@@ -316,8 +406,10 @@ def parse_config(data: dict, path: str | None = None) -> Config:
         raise ConfigError("elevation.cache_dir must be a string or null")
     tile_servers, default_tiles = _parse_map(data.get("map"))
     feeds, nodes_ttl, nodes_timeout = _parse_nodes(data.get("nodes"))
-    return Config(chain, float(timeout), retries, cache_dir, path, tile_servers, default_tiles,
-                  feeds, nodes_ttl, nodes_timeout, _parse_surface(data.get("surface")))
+    return Config(chain=chain, timeout_s=float(timeout), retries=retries,
+                  cache=_parse_cache(data.get("cache"), cache_dir), path=path, tile_servers=tile_servers,
+                  default_tile_server=default_tiles, node_feeds=feeds, nodes_cache_ttl_s=nodes_ttl,
+                  nodes_timeout_s=nodes_timeout, surface=_parse_surface(data.get("surface")))
 
 
 def load_config(path: str | None = None, env=None) -> Config:
@@ -368,4 +460,8 @@ def build_chain(config: Config, only: str | None = None, env=None) -> ElevationC
         if not specs:
             raise KeyError(only)
     providers = [make_provider(s, config.timeout_s, env) for s in specs]
-    return ElevationChain(providers, retries=config.retries, cache=open_cache(config.cache_dir))
+    return ElevationChain(providers, retries=config.retries, caches=CacheSet.from_config(config))
+
+
+def default_cache_dir() -> str | None:
+    return cache_mod.default_dir()

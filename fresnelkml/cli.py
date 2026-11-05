@@ -8,7 +8,7 @@ import os
 import sys
 
 from .analysis import AnalysisError, LinkReport, Options, analyze
-from .config import ConfigError, Config, build_chain, load_config
+from .config import CacheConfig, ConfigError, Config, build_chain, load_config
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationChain, ElevationUnavailable
 from .kml import render_kml
@@ -66,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tree-clearance-b", type=float, default=None,
                    help="ignore trees this close to site B (overrides --tree-clearance)")
     p.add_argument("--config", help="server-style config file with the elevation chain")
+    p.add_argument("--cache-dir", metavar="DIR",
+                   help="cache elevation and lidar lookups in this folder (default: the config's, or "
+                        "/var/cache/fresnelkml when it's writable)")
+    p.add_argument("--no-cache", action="store_true", help="don't read or write the lookup cache")
     p.add_argument("--elev-provider", choices=PROVIDER_CHOICES, action=_ChainAction, dest="provider",
                    help="add a provider to a one-off elevation chain (repeatable, in order)")
     p.add_argument("--opentopodata-url", action=_ChainAction, dest="otd_url", metavar="URL",
@@ -91,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _chain_from_args(args, env) -> ElevationChain | None:
+def _chain_from_args(args, env, cache: CacheConfig | None = None) -> ElevationChain | None:
     specs = getattr(args, "chain_specs", None)
     if not specs and (args.dataset or args.google_key):
         specs = [("provider", "opentopodata" if args.dataset else "google")]
@@ -120,7 +124,8 @@ def _chain_from_args(args, env) -> ElevationChain | None:
         while entry["name"] in seen:
             entry["name"] += "+"
         seen.add(entry["name"])
-    return build_chain(Config(chain=chain_cfg), env=env)
+    config = Config(chain=chain_cfg) if cache is None else Config(chain=chain_cfg, cache=cache)
+    return build_chain(config, env=env)
 
 
 def summary(report: LinkReport) -> str:
@@ -215,8 +220,12 @@ def main(argv=None, env=None) -> int:
         run_env = dict(env)
         if args.google_key:
             run_env["GOOGLE_ELEVATION_KEY"] = args.google_key
-        chain = _chain_from_args(args, run_env)
-        config = None if chain is not None else load_config(args.config, env=run_env)
+        config = load_config(args.config, env=run_env)
+        if args.no_cache:
+            config.cache.dir = None
+        elif args.cache_dir:
+            config.cache.dir = args.cache_dir
+        chain = _chain_from_args(args, run_env, config.cache)
         report = analyze(site_a, site_b, opt, elevation=chain, config=config, env=run_env)
     except (RequestError, AnalysisError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)

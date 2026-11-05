@@ -72,9 +72,10 @@ def _in_bbox(bbox, point) -> bool:
 class SurfaceSampler:
     """Samples the configured surface sources in order; later sources fill points earlier ones lack."""
 
-    def __init__(self, cfg, cache=None):
+    def __init__(self, cfg, caches=None):
+        """`caches` is a cache.CacheSet (or None): each lidar source gets its own cache."""
         self.cfg = cfg
-        self.cache = cache
+        self.caches = caches
         self.services = [(src, ImageService(src["url"], src["units"], cfg.timeout_s)) for src in cfg.sources]
 
     def sample(self, points: list[tuple[float, float]], deadline: float | None, progress=None) -> SurfaceSamples:
@@ -85,8 +86,9 @@ class SurfaceSampler:
             idx = [i for i in todo if _in_bbox(src.get("bbox"), points[i])]
             if not idx:
                 continue
+            cache = self.caches.for_service(src["name"], "surface") if self.caches else None
             res = service.sample([points[i] for i in idx], threads=self.cfg.threads, deadline=deadline,
-                                 cache=self.cache, cache_name=f"surface:{src['name']}", progress=progress)
+                                 cache=cache, progress=progress)
             for i, v in zip(idx, res.values):
                 if v is not None:
                     out.values[i] = v

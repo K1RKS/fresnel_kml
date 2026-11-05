@@ -625,11 +625,11 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
 
         if opt.trees and opt.tree_source == "lidar":
             if surface is None:
+                from .cache import CacheSet
                 from .config import load_config
-                from .elevation import open_cache
                 from .surface import SurfaceSampler
                 cfg = config or load_config(env=env)
-                surface = SurfaceSampler(cfg.surface, open_cache(cfg.cache_dir))
+                surface = SurfaceSampler(cfg.surface, CacheSet.from_config(cfg))
             deadline = min(started + REQUEST_LIMIT_S, time.monotonic() + surface.cfg.time_budget_s)
             check_surface(report, site_a, surface, deadline, progress)
         elif opt.trees:
