@@ -314,18 +314,20 @@ function showResult(data, units, picks = [], feedHeights = []) {
   $("#swatch-text").textContent = `Zone color ${r.zone_color.hex} (${r.zone_color.random ? "random" : "chosen"})`;
   if (r.zone_color.random) $("#color").value = r.zone_color.hex;
 
-  const warnings = [...(data.warnings || [])];
+  const warnings = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`);
   r.sites.forEach((s, i) => {
     if (!feedHeights[i] || s.agl_m === null) return;
+    let issue = null;
     if (s.agl_m > TALL_AGL_M) {
-      warnings.push(`${s.name}: the antenna works out to ${hfmt(s.agl_m)} above ground. The node's antenna height `
-        + "may be incorrect unless it's on a high tower.");
+      issue = `${s.name}: the antenna works out to ${hfmt(s.agl_m)} above ground. The node's antenna height `
+        + "may be incorrect unless it's on a high tower.";
     } else if (s.height_ref === "asl" && s.agl_m < 0) {
-      warnings.push(`${s.name}: the node's antenna height of ${hfmt(s.asl_m)} can't be right either way: above sea level `
-        + `it's underground, and above ground it would be a ${hfmt(s.asl_m)} tower. Enter the real antenna height.`);
+      issue = `${s.name}: the node's antenna height of ${hfmt(s.asl_m)} can't be right either way: above sea level `
+        + `it's underground, and above ground it would be a ${hfmt(s.asl_m)} tower. Enter the real antenna height.`;
     }
+    if (issue) warnings.push(`<li class="issue">${esc(issue)}</li>`);
   });
-  $("#warnings").innerHTML = warnings.map((w) => `<li>${esc(w)}</li>`).join("");
+  $("#warnings").innerHTML = warnings.join("");
   drawProfile(r);
   $("#result").hidden = false;
   drawMap(r);
