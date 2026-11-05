@@ -75,6 +75,25 @@ def test_close_up_catches_obstacle_between_main_samples(fake_chain):
     assert r.min_clearance_d_m < 200
 
 
+@pytest.mark.parametrize("window,samples", [(50.0, 25), (500.0, 83), (5000.0, 200)])
+def test_close_up_window_is_configurable(fake_chain, window, samples):
+    r = flat_link(10, fake_chain, end_window_m=window)
+    assert r.end_window_m == pytest.approx(window)
+    assert len(r.profile_a) == len(r.profile_b) == samples + 1  # same ~6 m spacing as the default, up to 200
+    assert r.profile_a[-1].d_m == pytest.approx(window, abs=1e-6)
+
+
+def test_close_up_window_option_parsing_and_limits():
+    from fresnelkml.analysis import AnalysisError, validate_options
+    from fresnelkml.parsing import parse_options_dict
+    opt, _, _ = parse_options_dict({"units": "ft", "end_window_m": 1000})
+    assert opt.end_window_m == pytest.approx(304.8)
+    assert Options().end_window_m == pytest.approx(152.4)
+    for bad in (1.0, 20_000.0):
+        with pytest.raises(AnalysisError):
+            validate_options(Options(end_window_m=bad))
+
+
 def test_close_up_window_shrinks_on_short_links(fake_chain):
     chain, _ = fake_chain()
     r = analyze(Site("A", 0, 0, agl_m=10), Site("B", 0, 0.002, agl_m=10), elevation=chain)

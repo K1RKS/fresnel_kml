@@ -24,8 +24,9 @@ MIN_TERRAIN_STATIONS = 16
 TERRAIN_SPACING_M = 250.0
 MIN_R1_FOR_CLEARANCE = 0.5
 CLEAR_RATIO = 0.6
-END_WINDOW_M = 500 * 0.3048  # close-up terrain sampling next to each tower
-END_SAMPLES = 25
+END_WINDOW_M = 500 * 0.3048  # default length of the close-up terrain sampling next to each tower
+END_SAMPLES = 25  # samples over the default window; longer windows keep the same spacing
+MAX_END_SAMPLES = 200
 REQUEST_LIMIT_S = 40.0  # lidar fetching stops by then, well inside the web server's 60 s timeout
 
 
@@ -69,6 +70,7 @@ class Options:
     tree_clearance_b_m: float = 50 * 0.3048  # and this far from site B
     tree_source: str = "fixed"  # "lidar": highest-hit surface where covered, tree_height_m elsewhere
     lidar_width: float = 0.6  # lidar samples across ±this fraction of r1 (0: centreline only)
+    end_window_m: float = END_WINDOW_M  # close-up profiles cover this much of the path next to each site
 
 
 @dataclass
@@ -328,6 +330,8 @@ def validate_options(opt: Options) -> None:
         ("trees", isinstance(opt.trees, bool), "must be true or false"),
         ("tree_source", opt.tree_source in ("fixed", "lidar"), "must be 'fixed' or 'lidar'"),
         ("lidar_width", _finite(opt.lidar_width) and 0 <= opt.lidar_width <= 1, "must be between 0 and 1"),
+        ("end_window_m", _finite(opt.end_window_m) and 3 <= opt.end_window_m <= 10_000,
+         "must be between 3 m (10 ft) and 10 km"),
         ("tree_height_m", _finite(opt.tree_height_m) and 0 <= opt.tree_height_m <= 150,
          "must be between 0 and 150 m (about 490 ft)"),
         ("tree_clearance_a_m", _finite(opt.tree_clearance_a_m) and 0 <= opt.tree_clearance_a_m <= 50_000,
@@ -512,8 +516,9 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
 
     profile_pts = geo.path_points(site_a.lat, site_a.lon, site_b.lat, site_b.lon,
                                   terrain_station_count(distance, n_mesh)) if terrain else []
-    window = min(END_WINDOW_M, distance / 2)
-    end_a_pts, end_b_pts = (end_window_points(site_a, site_b, distance, bearing_ab, bearing_ba, window)
+    window = min(opt.end_window_m, distance / 2)
+    end_samples = max(END_SAMPLES, min(MAX_END_SAMPLES, math.ceil(window / (END_WINDOW_M / END_SAMPLES))))
+    end_a_pts, end_b_pts = (end_window_points(site_a, site_b, distance, bearing_ab, bearing_ba, window, end_samples)
                             if terrain else ([], []))
     lookup_pts: list[tuple[float, float]] = []
     if terrain:

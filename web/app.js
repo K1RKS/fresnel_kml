@@ -221,6 +221,7 @@ function buildRequest() {
     sixty: $("#sixty").checked,
     k: num("k"),
     clutter_m: num("clutter"),
+    end_window_m: num("end_window"),
     elev_source: $("#elev_source").value,
     stations: num("stations"),
     ring_points: num("ring_points"),
@@ -387,8 +388,11 @@ function drawProfile(r) {
   ];
   const surface = r.surface && r.surface.enabled ? r.surface : null;
   drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface });
-  const zoom = [[r.profile_a, "a", "#profile-a", "#profile-title-a", `First ${dfmt(r.end_window_m)} from ${a.name}`],
-                [r.profile_b, "b", "#profile-b", "#profile-title-b", `Last ${dfmt(r.end_window_m)} to ${b.name}`]];
+  const feet = r.end_window_m / FEET;
+  const win = resultUnits === "ft" ? (feet < 5280 ? `${feet.toFixed(0)} ft` : dfmt(r.end_window_m, 2))
+    : (r.end_window_m < 1000 ? `${r.end_window_m.toFixed(0)} m` : dfmt(r.end_window_m, 2));
+  const zoom = [[r.profile_a, "a", "#profile-a", "#profile-title-a", `First ${win} from ${a.name}`],
+                [r.profile_b, "b", "#profile-b", "#profile-title-b", `Last ${win} to ${b.name}`]];
   for (const [pts, from, svgSel, titleSel, title] of zoom) {
     const show = pts && pts.length > 1;
     $(svgSel).hidden = $(titleSel).hidden = !show;

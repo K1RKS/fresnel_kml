@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="include the hidden 60%% zone (default on)")
     p.add_argument("--k", type=float, default=4.0 / 3.0, help="effective earth radius factor (default 4/3)")
     p.add_argument("--clutter", type=float, default=0.0, help="clutter height added to terrain")
+    p.add_argument("--end-window", type=float, default=None,
+                   help="length of the close-up profile next to each site (default 500 ft / 152.4 m, in --units)")
     p.add_argument("--trees", action=argparse.BooleanOptionalAction, default=False,
                    help="also check clearance over trees along the path (default off)")
     p.add_argument("--tree-source", choices=("fixed", "lidar"), default="fixed",
@@ -211,6 +213,8 @@ def main(argv=None, env=None) -> int:
                       mode=args.mode, color=args.color, coord_display=args.coord_display, units=args.units,
                       trees=args.trees, tree_source=args.tree_source, lidar_width=args.lidar_width)
         scale = FEET if args.units == "ft" else 1.0
+        if args.end_window is not None:
+            opt.end_window_m = args.end_window * scale
         if args.tree_height is not None:
             opt.tree_height_m = args.tree_height * scale
         for attr, own in (("tree_clearance_a_m", args.tree_clearance_a), ("tree_clearance_b_m", args.tree_clearance_b)):
