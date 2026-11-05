@@ -77,7 +77,8 @@ class SurfaceSampler:
         self.cache = cache
         self.services = [(src, ImageService(src["url"], src["units"], cfg.timeout_s)) for src in cfg.sources]
 
-    def sample(self, points: list[tuple[float, float]], deadline: float | None) -> SurfaceSamples:
+    def sample(self, points: list[tuple[float, float]], deadline: float | None, progress=None) -> SurfaceSamples:
+        """`progress(done, total)` counts points for each source in turn."""
         out = SurfaceSamples([None] * len(points), [None] * len(points))
         todo = list(range(len(points)))
         for src, service in self.services:
@@ -85,7 +86,7 @@ class SurfaceSampler:
             if not idx:
                 continue
             res = service.sample([points[i] for i in idx], threads=self.cfg.threads, deadline=deadline,
-                                 cache=self.cache, cache_name=f"surface:{src['name']}")
+                                 cache=self.cache, cache_name=f"surface:{src['name']}", progress=progress)
             for i, v in zip(idx, res.values):
                 if v is not None:
                     out.values[i] = v

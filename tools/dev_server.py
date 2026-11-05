@@ -25,6 +25,9 @@ def app(environ, start_response):
             length = 0
         body = environ["wsgi.input"].read(min(length, MAX_BODY + 1)) if length else b""
         resp = handle_request(environ["REQUEST_METHOD"], environ.get("QUERY_STRING", ""), body)
+        if resp.stream is not None:
+            start_response(f"{resp.status} {resp.reason}", resp.headers)
+            return resp.stream
         start_response(f"{resp.status} {resp.reason}", resp.headers + [("Content-Length", str(len(resp.body)))])
         return [resp.body]
 

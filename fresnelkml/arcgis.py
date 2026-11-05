@@ -77,8 +77,11 @@ class ImageService:
         return out
 
     def sample(self, points: list[Point], *, threads: int = 4, deadline: float | None = None,
-               cache=None, cache_name: str | None = None) -> SampleResult:
-        """Sample any number of points, in parallel batches, until `deadline` (time.monotonic())."""
+               cache=None, cache_name: str | None = None, progress=None) -> SampleResult:
+        """Sample any number of points, in parallel batches, until `deadline` (time.monotonic()).
+
+        `progress(done, total)` is called with point counts as batches finish (from worker threads).
+        """
         values: list[float | None] = [None] * len(points)
         todo = list(range(len(points)))
         if cache is not None and cache_name:
@@ -91,15 +94,25 @@ class ImageService:
                     values[i] = hit[0]
         batches = [todo[i:i + self.chunk] for i in range(0, len(todo), self.chunk)]
         result = SampleResult(values)
+        done = [len(points) - len(todo)]
+        lock = threading.Lock()
+        if progress:
+            progress(done[0], len(points))
         if not batches:
             return result
 
         def task(batch: list[int]):
-            remaining = None if deadline is None else deadline - time.monotonic()
-            if remaining is not None and remaining <= 0.5:
-                raise TimeoutError
-            timeout = self.timeout_s if remaining is None else min(self.timeout_s, remaining)
-            return self.sample_batch([points[i] for i in batch], timeout)
+            try:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0.5:
+                    raise TimeoutError
+                timeout = self.timeout_s if remaining is None else min(self.timeout_s, remaining)
+                return self.sample_batch([points[i] for i in batch], timeout)
+            finally:
+                if progress:
+                    with lock:
+                        done[0] += len(batch)
+                        progress(done[0], len(points))
 
         outcomes = run_parallel([lambda b=b: task(b) for b in batches], threads, deadline)
         for batch, outcome in zip(batches, outcomes):

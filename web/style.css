@@ -137,6 +137,8 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg.zone-fill { height: 10px; background: rgba(0, 200, 0, 0.35); border: 1px solid #2b8a3e; }
 .lg.sixty-fill { height: 10px; background: rgba(255, 165, 0, 0.3); border: 1px solid #e8590c; }
 .trees-row input:disabled { opacity: 0.5; }
+.progress { display: flex; align-items: center; gap: 10px; margin: -6px 0 14px; font-size: 0.88rem; color: var(--muted); }
+.progress progress { width: 260px; height: 12px; accent-color: #1e7ad2; }
 .tree-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .tree-mode label.disabled { opacity: 0.5; }
 

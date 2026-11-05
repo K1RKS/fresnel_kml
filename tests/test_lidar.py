@@ -84,6 +84,48 @@ def test_sample_chunks_and_cache(monkeypatch, tmp_path):
     assert again.values[:10] == pytest.approx([p[0] for p in pts[:10]])
 
 
+def test_sample_reports_progress(monkeypatch):
+    monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: [1.0] * len(pts)))
+    seen = []
+    ImageService("https://example.test/ImageServer", chunk=10).sample(
+        [(0.0, i * 0.001) for i in range(25)], threads=2, progress=lambda d, t: seen.append((d, t)))
+    assert seen[0] == (0, 25) and seen[-1] == (25, 25)
+    assert sorted(d for d, _ in seen) == [d for d, _ in seen]
+
+
+def stream_items(resp):
+    return [json.loads(line) for line in b"".join(resp.stream).decode().splitlines()]
+
+
+def test_api_progress_stream(local_config, tmp_path):
+    cfg = tmp_path / "c.json"
+    data = json.loads(open(local_config).read())
+    data["surface"] = {"sources": []}
+    cfg.write_text(json.dumps(data))
+    env = {"FRESNEL_CONFIG": str(cfg)}
+    body = {"site_a": {"name": "A", "lat": 37.0, "lon": -122.0, "agl_m": 10},
+            "site_b": {"name": "B", "lat": 37.05, "lon": -121.9, "agl_m": 10},
+            "options": {"trees": True, "tree_source": "lidar"}, "format": "json", "progress": True}
+    resp = handle_request("POST", "", json.dumps(body).encode(), env=env)
+    assert resp.status == 200 and dict(resp.headers)["Content-Type"].startswith("application/x-ndjson")
+    items = stream_items(resp)
+    stages = [i["progress"]["stage"] for i in items if "progress" in i]
+    assert stages[0] == "start" and stages[-1] == "report"
+    ground = [i["progress"] for i in items if "progress" in i and i["progress"]["stage"] == "ground"]
+    assert ground[-1]["done"] == ground[-1]["total"] > 0
+    assert items[-1]["result"]["report"]["surface"]["enabled"]
+
+    failing = {**body, "site_a": {"name": "A", "lat": 10.0, "lon": 10.0, "agl_m": 10},
+               "site_b": {"name": "B", "lat": 10.01, "lon": 10.0, "agl_m": 10}}
+    items = stream_items(handle_request("POST", "", json.dumps(failing).encode(), env=env))
+    assert items[-1]["status"] == 502 and items[-1]["error"]
+
+    bad = handle_request("POST", "", json.dumps({**body, "format": "kml"}).encode(), env=env)
+    assert bad.status == 400 and json.loads(bad.body)["field"] == "progress"
+    bad = handle_request("POST", "", json.dumps({**body, "site_a": {"name": "A"}}).encode(), env=env)
+    assert bad.status == 400 and bad.stream is None
+
+
 def test_sample_failures_and_deadline(monkeypatch):
     svc = ImageService("https://example.test/ImageServer", chunk=10)
     monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: {"error": {"code": 500}}))
@@ -161,7 +203,7 @@ class FakeSampler:
         self.label = label
         self.points = []
 
-    def sample(self, points, deadline):
+    def sample(self, points, deadline, progress=None):
         self.points = list(points)
         values = [self.func(lat, lon) for lat, lon in points]
         return SurfaceSamples(values, [None if v is None else self.label for v in values])

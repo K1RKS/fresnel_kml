@@ -34,17 +34,27 @@ def main() -> None:
         signal.signal(signal.SIGALRM, _timeout)
         signal.alarm(TIME_LIMIT_S)
     resp = handle_request(method, query, body)
-    if hasattr(signal, "SIGALRM"):
-        signal.alarm(0)
 
     out = sys.stdout.buffer
     out.write(f"Status: {resp.status} {resp.reason}\r\n".encode("ascii"))
     for name, value in resp.headers:
         out.write(f"{name}: {value}\r\n".encode("utf-8"))
-    out.write(f"Content-Length: {len(resp.body)}\r\n\r\n".encode("ascii"))
+    if resp.stream is None:
+        out.write(f"Content-Length: {len(resp.body)}\r\n".encode("ascii"))
+    out.write(b"\r\n")
     if method.upper() != "HEAD":
         out.write(resp.body)
+        out.flush()
+        if resp.stream is not None:
+            try:
+                for chunk in resp.stream:
+                    out.write(chunk)
+                    out.flush()
+            except TimeoutError:
+                out.write(b'{"error":"The request took too long.","status":504}\n')
     out.flush()
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

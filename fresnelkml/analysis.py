@@ -384,7 +384,7 @@ class _ProfileLookup:
         return getattr(a, attr) + f * (getattr(b, attr) - getattr(a, attr))
 
 
-def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | None) -> None:
+def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | None, progress=None) -> None:
     """LIDAR mode: sample the highest-hit surface across the zone; the fixed tree height fills gaps."""
     opt, distance, warnings = report.options, report.distance_m, report.warnings
     start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
@@ -408,7 +408,8 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
             y = f * opt.lidar_width * r1
             grid.append((y, *(geo.offset(lat, lon, y * math.cos(theta), -y * math.sin(theta)) if y else (lat, lon))))
         stations.append((d, lat, lon, r1))
-    got = sampler.sample([(g[1], g[2]) for g in grid], deadline)
+    lidar_progress = (lambda done, total: progress("lidar", done, total)) if progress else None
+    got = sampler.sample([(g[1], g[2]) for g in grid], deadline, progress=lidar_progress)
 
     lookup = _ProfileLookup(report.all_samples)
     ra, rb, k = report.site_a, report.site_b, len(fractions)
@@ -471,10 +472,12 @@ def terrain_station_count(distance_m: float, stations: int) -> int:
 
 
 def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, elevation=None, config=None,
-            rng: random.Random | None = None, env=None, surface=None) -> LinkReport:
+            rng: random.Random | None = None, env=None, surface=None, progress=None) -> LinkReport:
     """Compute everything needed to render the KML. `elevation` is an ElevationChain and `surface` a
-    SurfaceSampler (each built from the server config when omitted and needed)."""
+    SurfaceSampler (each built from the server config when omitted and needed). `progress(stage, done,
+    total)` is told about the slow steps: "ground" lookups and "lidar" samples."""
     started = time.monotonic()
+    progress = progress or (lambda stage, done=None, total=None: None)
     opt = options or Options()
     validate_options(opt)
     validate_site(site_a, "site_a")
@@ -533,7 +536,9 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
                 chain = chain.only(opt.elev_source)
             except KeyError:
                 raise AnalysisError(f"Unknown elevation source '{opt.elev_source}'.", "options.elev_source") from None
+        progress("ground", 0, len(lookup_pts))
         looked_up = chain.lookup(lookup_pts)
+        progress("ground", len(lookup_pts), len(lookup_pts))
         if any(r.assumed_zero for r in looked_up):
             count = sum(r.assumed_zero for r in looked_up)
             warnings.append(f"{count} point(s) returned no elevation (open water?); treated as 0 m.")
@@ -626,7 +631,7 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
                 cfg = config or load_config(env=env)
                 surface = SurfaceSampler(cfg.surface, open_cache(cfg.cache_dir))
             deadline = min(started + REQUEST_LIMIT_S, time.monotonic() + surface.cfg.time_budget_s)
-            check_surface(report, site_a, surface, deadline)
+            check_surface(report, site_a, surface, deadline, progress)
         elif opt.trees:
             report.trees_checked = True
             start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m

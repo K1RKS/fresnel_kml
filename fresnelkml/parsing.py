@@ -12,7 +12,7 @@ from .coords import LAT, LON, CoordinateError, parse_coordinate, parse_position
 from .units import FEET
 
 SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m"}
-REQUEST_KEYS = {"site_a", "site_b", "options", "format"}
+REQUEST_KEYS = {"site_a", "site_b", "options", "format", "progress"}
 OPTION_KEYS = {f.name for f in fields(Options)} | {"units", "tree_clearance_m"}
 IGNORED_OPTION_KEYS = {"google_key"}
 
@@ -31,6 +31,7 @@ class ParsedRequest:
     units: str = "m"
     format: str = "kml"
     warnings: list[str] = field(default_factory=list)
+    progress: bool = False  # stream progress lines before the result (JSON format only)
 
 
 def _number(value, where: str) -> float:
@@ -174,12 +175,15 @@ def parse_request(data) -> ParsedRequest:
     fmt = data.get("format", "kml")
     if fmt not in ("kml", "json"):
         raise RequestError("format must be 'kml' or 'json'.", "format")
+    progress = data.get("progress") is not None and _boolean(data["progress"], "progress")
+    if progress and fmt != "json":
+        raise RequestError("progress needs format 'json'.", "progress")
     for key in ("site_a", "site_b"):
         if key not in data:
             raise RequestError(f"{key} is required.", key)
     site_a, wa = parse_site_dict(data["site_a"], "site_a", units)
     site_b, wb = parse_site_dict(data["site_b"], "site_b", units)
-    return ParsedRequest(site_a, site_b, opt, units, fmt, warnings + wa + wb)
+    return ParsedRequest(site_a, site_b, opt, units, fmt, warnings + wa + wb, progress)
 
 
 _HEIGHT_RE = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*(agl|asl)?$", re.I)

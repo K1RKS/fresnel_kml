@@ -595,32 +595,82 @@ async function submit(ev) {
   const btn = $("#generate");
   btn.disabled = true;
   $("#busy").hidden = false;
-  const request = buildRequest();
+  const request = { ...buildRequest(), progress: true };
   const picks = [pickedNode("site_a"), pickedNode("site_b")];
   const feedHeights = SITE_KEYS.map(feedHeight);
+  showProgress({ stage: "start" });
   try {
     const resp = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     });
-    let data;
-    try {
-      data = await resp.json();
-    } catch (err) {
-      throw new Error(`Server returned HTTP ${resp.status}.`);
-    }
     if (!resp.ok) {
+      let data = {};
+      try {
+        data = await resp.json();
+      } catch (err) {
+        /* not JSON: report the status */
+      }
       showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
       return;
     }
-    showResult(data, request.options.units, picks, feedHeights);
+    let data = null;
+    await readLines(resp, (item) => {
+      if (item.progress) showProgress(item.progress);
+      else data = item;
+    });
+    if (!data) throw new Error("The server's answer ended early.");
+    if (data.error) {
+      showError(data.error, data.field);
+      return;
+    }
+    showResult(data.result, request.options.units, picks, feedHeights);
   } catch (err) {
     showError(err.message || String(err));
   } finally {
     btn.disabled = false;
     $("#busy").hidden = true;
+    $("#progress").hidden = true;
   }
+}
+
+// The API streams one JSON object per line while it works.
+async function readLines(resp, onItem) {
+  const handle = (line) => {
+    if (line.trim()) onItem(JSON.parse(line));
+  };
+  if (!resp.body || !resp.body.getReader) {
+    (await resp.text()).split("\n").forEach(handle);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    const lines = buffered.split("\n");
+    buffered = lines.pop();
+    lines.forEach(handle);
+  }
+  handle(buffered + decoder.decode());
+}
+
+function showProgress(p) {
+  const bar = $("#progress-bar");
+  const text = $("#progress-text");
+  $("#progress").hidden = false;
+  if (p.stage === "lidar" && p.total) {
+    bar.value = p.done / p.total;
+    text.textContent = `Fetching lidar: ${Math.round((100 * p.done) / p.total)}% `
+      + `(${p.done.toLocaleString()} of ${p.total.toLocaleString()} samples)`;
+    return;
+  }
+  bar.removeAttribute("value");
+  text.textContent = { start: "Starting\u2026", ground: "Looking up ground elevations\u2026",
+    report: "Building the report\u2026" }[p.stage] || "Working\u2026";
 }
 
 function download() {

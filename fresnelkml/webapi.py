@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import queue
 import re
 import sys
+import threading
 import traceback
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from . import __version__
@@ -21,6 +24,7 @@ from .parsing import RequestError, parse_request, resolve_position
 MAX_BODY = 16 * 1024
 KML_TYPE = "application/vnd.google-earth.kml+xml; charset=utf-8"
 JSON_TYPE = "application/json; charset=utf-8"
+NDJSON_TYPE = "application/x-ndjson; charset=utf-8"  # not in gzip_types, so NGINX passes lines straight on
 
 USAGE = {
     "service": "fresnelkml",
@@ -47,6 +51,7 @@ class Response:
     status: int
     body: bytes
     headers: list[tuple[str, str]] = field(default_factory=list)
+    stream: Iterator[bytes] | None = None  # sent after `body`, flushed chunk by chunk, with no Content-Length
 
     @property
     def reason(self) -> str:
@@ -133,6 +138,54 @@ def _get(query: str, env) -> Response:
     return _json(200, USAGE)
 
 
+def _failure(exc: Exception) -> Response:
+    if isinstance(exc, AnalysisError):
+        return _error(400, str(exc), exc.field)
+    if isinstance(exc, ElevationUnavailable):
+        return _error(502, f"{exc}. Give asl_m (or ground_m) for each site and set terrain_check to false "
+                           "to skip the lookup.")
+    if isinstance(exc, TimeoutError):
+        return _error(504, "The request took too long.")
+    traceback.print_exc(file=sys.stderr)
+    return _error(500, "Internal error; see the server log.")
+
+
+def _line(item: dict) -> bytes:
+    return (json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _progress_stream(req, cfg, env) -> Iterator[bytes]:
+    """One JSON object per line: {"progress": {stage, done, total}} while working, then
+    {"result": {kml, report, warnings}} or {"error", "field", "status"}."""
+    events: queue.Queue = queue.Queue()
+
+    def progress(stage: str, done: int | None = None, total: int | None = None) -> None:
+        events.put({"progress": {"stage": stage, "done": done, "total": total}})
+
+    def work() -> None:
+        try:
+            report = analyze(req.site_a, req.site_b, req.options, config=cfg, env=env, progress=progress)
+            progress("report")
+            events.put({"result": {"kml": render_kml(report), "report": report.to_dict(),
+                                   "warnings": req.warnings + report.warnings}})
+        except Exception as exc:  # noqa: BLE001 - every failure becomes an error line
+            resp = _failure(exc)
+            events.put({**json.loads(resp.body), "status": resp.status})
+        finally:
+            events.put(None)
+
+    yield _line({"progress": {"stage": "start", "done": None, "total": None}})
+    threading.Thread(target=work, daemon=True).start()
+    while True:
+        try:
+            item = events.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        if item is None:
+            return
+        yield _line(item)
+
+
 def _post(body: bytes, env) -> Response:
     if len(body) > MAX_BODY:
         return _error(413, f"Request body is larger than {MAX_BODY // 1024} KB.")
@@ -142,19 +195,19 @@ def _post(body: bytes, env) -> Response:
         return _error(400, "Request body is not valid JSON.")
     try:
         req = parse_request(data)
-        cfg = None
-        try:
-            cfg = load_config(env=env)
-        except ConfigError as exc:
-            return _error(500, f"Server configuration error: {exc}")
-        report = analyze(req.site_a, req.site_b, req.options, config=cfg, env=env)
-    except (RequestError, AnalysisError) as exc:
+    except RequestError as exc:
         return _error(400, str(exc), exc.field)
-    except ElevationUnavailable as exc:
-        return _error(502, f"{exc}. Give asl_m (or ground_m) for each site and set terrain_check to false "
-                           "to skip the lookup.")
-    except TimeoutError:
-        return _error(504, "The request took too long.")
+    try:
+        cfg = load_config(env=env)
+    except ConfigError as exc:
+        return _error(500, f"Server configuration error: {exc}")
+    if req.progress:
+        return Response(200, b"", [("Content-Type", NDJSON_TYPE), ("Cache-Control", "no-store"),
+                                   ("X-Accel-Buffering", "no")], stream=_progress_stream(req, cfg, env))
+    try:
+        report = analyze(req.site_a, req.site_b, req.options, config=cfg, env=env)
+    except (AnalysisError, ElevationUnavailable, TimeoutError) as exc:
+        return _failure(exc)
 
     kml = render_kml(report)
     warnings = req.warnings + report.warnings

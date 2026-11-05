@@ -73,6 +73,22 @@ def test_cgi_returns_kml_offline(built, local_config):
     assert "Terrain check" in [f.text for f in root.iter("{http://www.opengis.net/kml/2.2}name")]
 
 
+def test_cgi_streams_progress(built, local_config):
+    site = os.path.join(built[0], "site")
+    payload = json.dumps({
+        "site_a": {"name": "A", "lat": 37.0, "lon": -122.0, "agl_m": 10},
+        "site_b": {"name": "B", "lat": 37.05, "lon": -121.9, "agl_m": 10},
+        "format": "json", "progress": True,
+    }).encode()
+    headers, body = run_cgi(site, body=payload, extra_env={"FRESNEL_CONFIG": local_config})
+    assert headers["Status"] == "200 OK" and "Content-Length" not in headers
+    assert headers["Content-Type"].startswith("application/x-ndjson") and headers["X-Accel-Buffering"] == "no"
+    items = [json.loads(line) for line in body.decode().splitlines()]
+    stages = [i["progress"]["stage"] for i in items if "progress" in i]
+    assert stages[0] == "start" and "ground" in stages and stages[-1] == "report"
+    assert "kml" in items[-1]["result"] and items[-1]["result"]["report"]["terrain_checked"]
+
+
 def test_cgi_get_and_errors(built):
     site = os.path.join(built[0], "site")
     headers, payload = run_cgi(site, method="GET", query="parse=CM87xa08")
