@@ -73,7 +73,7 @@ The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) s
 
 ### Terrain profile
 
-With the terrain check on, the results show the profile of the whole path and close-ups of the first and last stretch next to each site (500 ft by default; "Close-up profiles" under Advanced). Hover over any of them to measure at that point: the readout under the graph gives the distance from each site, the gap from the ground to the Fresnel zone bottom and to the 60% line, and with Trees or LIDAR, the height of the tree or lidar top above the ground and its gap to the zone bottom and the 60% line (in red when it reaches into them). Click to pin the cursor, drag it to move it, use the arrow keys to step from sample to sample (Shift for ten), and Esc to unpin. The numbers are read from the lines as drawn.
+With the terrain check on, the results show the profile of the whole path and close-ups of the first and last stretch next to each site (500 ft by default; "Close-up profiles" under Advanced). Hover over any of them to measure at that point: the readout under the graph gives the distance from each site, the gap from the ground to the Fresnel zone bottom and to the 60% line, and with Trees or LIDAR, the height of the tree or lidar top above the ground and its gap to the zone bottom and the 60% line (in red when it reaches into them). Click to pin the cursor, drag it to move it, use the arrow keys to step from sample to sample (Shift for ten), and Esc to unpin. A yellow marker on the map follows the cursor (faded while hovering, solid when pinned). The numbers are read from the lines as drawn.
 
 ### Elevation sources
 

@@ -757,10 +757,47 @@ function renderMeasure(svg) {
     const m = measureAt(plot, active);
     g.innerHTML = html + cursorDots(plot, m);
     if (readout) readout.innerHTML = readoutHtml(plot, m, !hovering);
+    mapCursorSource = svg;
   } else {
     g.innerHTML = html;
     if (readout) readout.textContent = MEASURE_HINT;
+    if (mapCursorSource === svg) {
+      mapCursorSource = MEASURED_PLOTS.map((sel) => $(sel)).find((s) => s._measure && hasValue(s._measure.pinned)) || null;
+    }
   }
+  syncMapCursor();
+}
+
+// ----- The measuring cursor's place on the map -----
+
+const MEASURED_PLOTS = ["#profile-main", "#profile-a", "#profile-b"];
+let mapCursorSource = null;  // the profile graph whose cursor the map marker follows
+let mapCursor = null;
+
+function syncMapCursor() {
+  if (!map) return;
+  const svg = mapCursorSource;
+  const st = svg && svg._measure, plot = svg && svg._plot;
+  const hovering = st && hasValue(st.hover) && !st.dragging;
+  const d = st ? (hovering ? st.hover : st.pinned) : null;
+  const lat = hasValue(d) ? interp(plot.p, d, "lat") : null;
+  const lon = hasValue(d) ? interp(plot.p, d, "lon") : null;
+  if (!hasValue(lat) || !hasValue(lon)) {
+    if (mapCursor) mapCursor.remove();
+    mapCursor = null;
+    return;
+  }
+  if (!mapCursor) {
+    mapCursor = L.circleMarker([lat, lon], { radius: 7, color: "#1d232b", weight: 2, fillColor: "#ffd43b",
+      interactive: false, pane: "markerPane" }).addTo(map);
+    mapCursor.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+  }
+  mapCursor.setLatLng([lat, lon]);
+  mapCursor.setStyle({ fillOpacity: hovering ? 0.6 : 1, dashArray: hovering ? "3 3" : null });
+  const [a, b] = plot.masts;
+  const where = plot.from === "b" ? `${dfmt(Math.max(0, plot.D - d), 2)} to ${b.name}` : `${dfmt(d, 2)} from ${a.name}`;
+  mapCursor.setTooltipContent(esc(where));
+  if (!mapCursor.isTooltipOpen()) mapCursor.openTooltip();
 }
 
 function resetMeasure(svg) {
@@ -1000,7 +1037,7 @@ function init() {
   loadSources();
   loadMapConfig();
   setupMapViews();
-  ["#profile-main", "#profile-a", "#profile-b"].forEach((sel) => setupMeasure($(sel)));
+  MEASURED_PLOTS.forEach((sel) => setupMeasure($(sel)));
   initSites();
 }
 

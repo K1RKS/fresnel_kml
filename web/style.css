@@ -154,6 +154,7 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .trees-row { margin-top: 4px; }
 #map { height: 440px; border: 1px solid var(--line); border-radius: 6px; }
 .leaflet-tooltip.site-tip { font-weight: 600; }
+.leaflet-tooltip.cursor-tip { font-size: 0.78rem; padding: 2px 6px; }
 .lg.zone-fill { height: 10px; background: rgba(0, 200, 0, 0.35); border: 1px solid #2b8a3e; }
 .lg.sixty-fill { height: 10px; background: rgba(255, 165, 0, 0.3); border: 1px solid #e8590c; }
 .trees-row input:disabled { opacity: 0.5; }
