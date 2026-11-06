@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass, field
 
 from .arcgis import ImageService
+from .cache import slug
 
 # Sample lines across the zone, as fractions of the lidar width (which is itself a fraction of r1).
 LATERAL_FRACTIONS = (0.0, -0.5, 0.5, -1.0, 1.0)
-MAX_PLOT_POINTS = 600
+MAX_PLOT_POINTS = 600  # whole-path profile
+MAX_CLOSEUP_POINTS = 1500  # each close-up profile: every station unless the window is very long
 MAX_MARKERS = 100
 
 
@@ -28,6 +32,7 @@ class SurfacePoint:
     r1_m: float
     clearance: float | None
     lidar: bool  # False: no lidar here, the fixed tree height was used
+    dataset: dict | None = None  # the lidar dataset of the worst sample: {"source", "name", "year"}
 
     @property
     def height_m(self) -> float:
@@ -41,6 +46,30 @@ class SurfaceSamples:
     failed: int = 0
     timed_out: int = 0
     errors: list[str] = field(default_factory=list)
+    datasets: list[tuple[int, int] | None] = field(default_factory=list)  # (source index, raster id) per value
+
+
+def dataset_label(d: dict | None) -> str:
+    """OLC Santiam 2018, or Some Survey (2016) when the name has no year in it."""
+    if not d:
+        return "unknown lidar"
+    name, year = d.get("name") or "unnamed lidar", d.get("year")
+    return f"{name} ({year})" if year and str(year) not in name else name
+
+
+def flown_years(datasets: list[dict]) -> tuple[int, int] | None:
+    """(oldest, newest) year of the lidar datasets used, or None when no year is known."""
+    years = [d["year"] for d in datasets if isinstance(d.get("year"), int)]
+    return (min(years), max(years)) if years else None
+
+
+def flown_text(datasets: list[dict]) -> str:
+    """Lidar was flown in 2017, or Lidar was flown between 2007 and 2018 when the datasets differ."""
+    span = flown_years(datasets)
+    if span is None:
+        return ""
+    return (f"Lidar was flown in {span[0]}" if span[0] == span[1]
+            else f"Lidar was flown between {span[0]} and {span[1]}")
 
 
 def lateral_clearance(dz: float, offset_m: float, r1_m: float) -> float:
@@ -62,6 +91,42 @@ def grid_spacing(length_m: float, spacing_m: float, lines: int, max_points: int)
     return max(spacing_m, length_m / (stations - 1))
 
 
+NEAR_SHARE = 0.5  # the close-up windows may use at most this share of the point budget
+
+
+def lidar_stations(start: float, stop: float, distance: float, window: float, spacing: float, lines: int,
+                   max_points: int) -> tuple[list[float], float, float]:
+    """Distances along the path to sample, as (distances, spacing between the close-up windows, spacing in them).
+
+    The close-up windows next to each site get the full `spacing` first (unless they alone would need more
+    than half the point budget); the stretch between them gets whatever spacing the rest of the budget allows.
+    """
+    budget = max(4, max_points // max(1, lines))
+    a_end, b_start = min(stop, window), max(start, distance - window)
+    if window <= 0:
+        near, mid = [], (start, stop)
+    elif a_end >= b_start:
+        near, mid = [(start, stop)], None
+    else:
+        near = [(a, b) for a, b in ((start, a_end), (b_start, stop)) if b > a]
+        mid = (max(start, a_end), min(stop, b_start))
+    near_len = sum(b - a for a, b in near)
+    near_spacing = spacing
+    if near and near_len / spacing > budget * (NEAR_SHARE if mid else 1.0):
+        near_spacing = near_len / (budget * (NEAR_SHARE if mid else 1.0))
+    mid_spacing = near_spacing
+    if mid:
+        left = max(2, budget - int(near_len / near_spacing) - len(near))
+        mid_spacing = max(spacing, (mid[1] - mid[0]) / (left - 1))
+
+    dists: set[float] = set()
+    for (a, b), sp in [(seg, near_spacing) for seg in near] + ([(mid, mid_spacing)] if mid else []):
+        n = int((b - a) / sp)
+        dists.update(round(a + i * sp, 6) for i in range(n + 1))
+        dists.add(round(b, 6))
+    return sorted(dists), mid_spacing, near_spacing
+
+
 def _in_bbox(bbox, point) -> bool:
     if not bbox:
         return True
@@ -80,36 +145,95 @@ class SurfaceSampler:
 
     def sample(self, points: list[tuple[float, float]], deadline: float | None, progress=None) -> SurfaceSamples:
         """`progress(done, total)` counts points for each source in turn."""
-        out = SurfaceSamples([None] * len(points), [None] * len(points))
+        out = SurfaceSamples([None] * len(points), [None] * len(points), datasets=[None] * len(points))
         todo = list(range(len(points)))
-        for src, service in self.services:
+        for si, (src, service) in enumerate(self.services):
             idx = [i for i in todo if _in_bbox(src.get("bbox"), points[i])]
             if not idx:
                 continue
             cache = self.caches.for_service(src["name"], "surface") if self.caches else None
             res = service.sample([points[i] for i in idx], threads=self.cfg.threads, deadline=deadline,
                                  cache=cache, progress=progress)
-            for i, v in zip(idx, res.values):
+            rasters = res.rasters or [None] * len(idx)
+            for i, v, rid in zip(idx, res.values, rasters):
                 if v is not None:
                     out.values[i] = v
                     out.labels[i] = src["label"]
+                    out.datasets[i] = None if rid is None else (si, rid)
             out.failed += res.failed
             out.timed_out += res.timed_out
             out.errors += res.errors
             todo = [i for i in todo if out.values[i] is None]
         return out
 
+    def _meta_path(self, src: dict) -> str | None:
+        directory = getattr(self.caches, "directory", None) if self.caches else None
+        return os.path.join(directory, "datasets", f"{slug(src['name'])}.json") if directory else None
 
-def thin_for_plot(points: list[SurfacePoint], distance_m: float, bins: int = MAX_PLOT_POINTS) -> list[SurfacePoint]:
-    """At most `bins` stations: the highest in each stretch of path, so peaks survive."""
+    def _load_meta(self, src: dict) -> dict:
+        path = self._meta_path(src)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (TypeError, OSError, ValueError):
+            return {}
+
+    def _save_meta(self, src: dict, data: dict) -> None:
+        path = self._meta_path(src)
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass  # a cache we can't write only costs a lookup next time
+
+    def describe(self, wanted: dict[tuple[int, int], tuple[float, float]],
+                 deadline: float | None) -> dict[tuple[int, int], dict]:
+        """{(source index, raster id): {"source", "name", "year"}}, from the source's catalog (identify at a
+        point the raster covers). Answers are kept in the cache folder, so each dataset is looked up once."""
+        out = {}
+        for si, (src, service) in enumerate(self.services):
+            mine = {rid: pt for (s, rid), pt in wanted.items() if s == si}
+            if not mine:
+                continue
+            known = self._load_meta(src)
+            missing = {rid: pt for rid, pt in mine.items() if str(rid) not in known}
+            if missing:
+                found = service.datasets(missing, deadline=deadline)
+                if found:
+                    known.update({str(rid): info for rid, info in found.items()})
+                    self._save_meta(src, known)
+            for rid in mine:
+                info = known.get(str(rid))
+                if isinstance(info, dict):
+                    out[(si, rid)] = {"source": src["label"], "name": info.get("name"), "year": info.get("year")}
+        return out
+
+
+def thin_for_plot(points: list[SurfacePoint], distance_m: float, bins: int = MAX_PLOT_POINTS,
+                  start_m: float = 0.0) -> list[SurfacePoint]:
+    """At most `bins` stations over `distance_m` of path from `start_m`: the highest in each stretch,
+    so peaks survive."""
     if len(points) <= bins:
         return list(points)
     best: dict[int, SurfacePoint] = {}
     for p in points:
-        b = min(bins - 1, int(p.d_m / distance_m * bins))
+        b = max(0, min(bins - 1, int((p.d_m - start_m) / distance_m * bins)))
         if b not in best or p.peak_m > best[b].peak_m:
             best[b] = p
     return [best[b] for b in sorted(best)]
+
+
+def window_points(points: list[SurfacePoint], d0: float, d1: float,
+                  bins: int = MAX_CLOSEUP_POINTS) -> list[SurfacePoint]:
+    """Every station from d0 to d1 (for the close-up profiles), thinned only past `bins`."""
+    inside = [p for p in points if d0 - 1e-6 <= p.d_m <= d1 + 1e-6]
+    return thin_for_plot(inside, max(d1 - d0, 1e-6), bins, d0)
 
 
 def obstruction_markers(points: list[SurfacePoint], ratio: float, limit: int = MAX_MARKERS) -> list[SurfacePoint]:

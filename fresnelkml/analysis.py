@@ -12,8 +12,8 @@ from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
-from .surface import (LATERAL_FRACTIONS, SurfacePoint, grid_spacing, lateral_clearance, obstruction_markers,
-                      thin_for_plot)
+from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_text, flown_years, lateral_clearance,
+                      lidar_stations, obstruction_markers, thin_for_plot, window_points)
 from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
@@ -27,6 +27,7 @@ CLEAR_RATIO = 0.6
 END_WINDOW_M = 500 * 0.3048  # default length of the close-up terrain sampling next to each tower
 END_SAMPLES = 25  # samples over the default window; longer windows keep the same spacing
 MAX_END_SAMPLES = 200
+OLD_LIDAR_YEARS = 10  # warn when the worst point's lidar is older than this
 REQUEST_LIMIT_S = 40.0  # lidar fetching stops by then, well inside the web server's 60 s timeout
 
 
@@ -145,8 +146,10 @@ class LinkReport:
     surface_checked: bool = False
     surface_points: list[SurfacePoint] = field(default_factory=list)
     surface_sources: list[str] = field(default_factory=list)
+    surface_datasets: list[dict] = field(default_factory=list)  # {"source", "name", "year", "share"}, biggest first
     surface_coverage: float | None = None  # share of stations with lidar
-    surface_spacing_m: float | None = None
+    surface_spacing_m: float | None = None  # between the close-up windows
+    surface_near_spacing_m: float | None = None  # in the close-up windows next to each site
     surface_worst: SurfacePoint | None = None
     min_surface_clearance_m: float | None = None  # line of sight minus the surface top at the worst point
     surface_status: str | None = None
@@ -185,11 +188,16 @@ class LinkReport:
 
     def surface_dict(self) -> dict:
         w = self.surface_worst
+        win = self.end_window_m or 0.0  # the close-up profiles get every station in their window
         return {
             "enabled": self.surface_checked,
             "sources": self.surface_sources,
+            "datasets": self.surface_datasets,
+            "flown": None if flown_years(self.surface_datasets) is None else dict(
+                zip(("oldest", "newest"), flown_years(self.surface_datasets))),
             "coverage": None if self.surface_coverage is None else round(self.surface_coverage, 3),
             "spacing_m": _r(self.surface_spacing_m),
+            "near_spacing_m": _r(self.surface_near_spacing_m),
             "width": self.options.lidar_width,
             "fallback_height_m": _r(self.options.tree_height_m),
             "clearance_a_m": _r(self.options.tree_clearance_a_m),
@@ -200,6 +208,9 @@ class LinkReport:
             "worst": None if w is None else _surface_point_dict(w),
             "status": self.surface_status,
             "plot": [_surface_point_dict(p) for p in thin_for_plot(self.surface_points, self.distance_m)],
+            "plot_a": [_surface_point_dict(p) for p in window_points(self.surface_points, 0.0, win)],
+            "plot_b": [_surface_point_dict(p) for p in
+                       window_points(self.surface_points, self.distance_m - win, self.distance_m)],
             "markers": [_surface_point_dict(p) for p in self.surface_obstructions],
         }
 
@@ -280,6 +291,7 @@ def _surface_point_dict(p: SurfacePoint) -> dict:
         "top_m": _r(p.top_m), "height_m": _r(p.height_m), "effective_m": _r(p.effective_m),
         "peak_m": _r(p.peak_m), "los_m": _r(p.los_m),
         "clearance": None if p.clearance is None else round(p.clearance, 3), "lidar": p.lidar,
+        "dataset": p.dataset,
     }
 
 
@@ -388,6 +400,41 @@ class _ProfileLookup:
         return getattr(a, attr) + f * (getattr(b, attr) - getattr(a, attr))
 
 
+def _station_weights(points: list[SurfacePoint]) -> list[float]:
+    """How much of the path each station stands for (half the gap to each neighbour), since stations are
+    closer together in the close-up windows than in between."""
+    ds = [p.d_m for p in points]
+    if len(ds) < 2:
+        return [1.0] * len(ds)
+    return [((ds[i + 1] if i + 1 < len(ds) else ds[i]) - (ds[i - 1] if i else ds[i])) / 2 or 1e-9
+            for i in range(len(ds))]
+
+
+def _describe_datasets(report: LinkReport, sampler, got, grid, station_keys: dict, worst_keys: dict,
+                       points: list[SurfacePoint], weights: list[float], deadline: float | None) -> None:
+    """Name the lidar datasets (and the year each was flown) used along the path and at each station."""
+    used = {key for key in list(station_keys.values()) + list(worst_keys.values()) if key is not None}
+    if not used or not hasattr(sampler, "describe"):
+        return
+    keys = got.datasets
+    wanted = {}
+    for i, key in enumerate(keys):
+        if key in used and key not in wanted:
+            wanted[key] = (grid[i][1], grid[i][2])
+    # the identify lookups get a few seconds of their own, even if the samples used up the lidar budget
+    meta_deadline = time.monotonic() + 5 if deadline is None else max(deadline, time.monotonic() + 3)
+    infos = sampler.describe(wanted, meta_deadline)
+    for i, key in worst_keys.items():
+        points[i].dataset = infos.get(key)
+    counts: dict = {}
+    for i, key in station_keys.items():
+        if key in infos:
+            counts[key] = counts.get(key, 0) + weights[i]
+    total = sum(weights)
+    report.surface_datasets = [{**infos[key], "share": round(n / total, 3)}
+                               for key, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
 def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | None, progress=None) -> None:
     """LIDAR mode: sample the highest-hit surface across the zone; the fixed tree height fills gaps."""
     opt, distance, warnings = report.options, report.distance_m, report.warnings
@@ -396,10 +443,8 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
         warnings.append("No part of the path is outside both tree clearances, so lidar wasn't checked.")
         return
     fractions = (0.0,) if opt.lidar_width == 0 else LATERAL_FRACTIONS
-    spacing = grid_spacing(stop - start, sampler.cfg.spacing_m, len(fractions), sampler.cfg.max_points)
-    dists = [start + i * spacing for i in range(int((stop - start) / spacing) + 1)]
-    if stop - dists[-1] > 1e-6:
-        dists.append(stop)
+    dists, spacing, near_spacing = lidar_stations(start, stop, distance, report.end_window_m or 0.0,
+                                                  sampler.cfg.spacing_m, len(fractions), sampler.cfg.max_points)
 
     stations, grid = [], []
     for d in dists:
@@ -417,7 +462,9 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
 
     lookup = _ProfileLookup(report.all_samples)
     ra, rb, k = report.site_a, report.site_b, len(fractions)
+    keys = got.datasets or [None] * len(got.values)
     points, covered = [], 0
+    station_keys, worst_keys = {}, {}  # station index -> dataset key of its centre / worst sample
     for si, (d, lat, lon, r1) in enumerate(stations):
         t = d / distance
         los = (1 - t) * ra.asl_m + t * rb.asl_m
@@ -439,14 +486,18 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
             peak = max(peak, v + bulge)
             c = lateral_clearance(los - v - bulge, y, r1) if usable else None
             if worst is None or (c is not None and (worst[0] is None or c < worst[0])):
-                worst = (c, y, plat, plon, v)
-        c, y, plat, plon, v = worst
+                worst = (c, y, plat, plon, v, keys[si * k + j])
+        c, y, plat, plon, v, worst_keys[len(points)] = worst
+        station_keys[len(points)] = keys[si * k]
         points.append(SurfacePoint(d, plat, plon, y, v, ground, effective, peak, los, r1, c, True))
 
+    weights = _station_weights(points)
+    _describe_datasets(report, sampler, got, grid, station_keys, worst_keys, points, weights, deadline)
     report.surface_checked = True
     report.surface_points = points
     report.surface_spacing_m = spacing
-    report.surface_coverage = covered / len(points)
+    report.surface_near_spacing_m = near_spacing
+    report.surface_coverage = sum(w for p, w in zip(points, weights) if p.lidar) / sum(weights)
     report.surface_sources = list(dict.fromkeys(label for label in got.labels if label))
     scored = [p for p in points if p.clearance is not None]
     if scored:
@@ -467,7 +518,15 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
     if got.errors:
         warnings.append(f"Lidar source error: {got.errors[0][:160]}")
     if spacing > sampler.cfg.spacing_m + 1e-9:
-        warnings.append(f"Long path: lidar was sampled every {fmt_distance(spacing, u, 1)}.")
+        near = (f", and every {fmt_distance(near_spacing, u, 1)} in the close-ups next to each site"
+                if near_spacing < spacing - 1e-9 else "")
+        warnings.append(f"Long path: lidar was sampled every {fmt_distance(spacing, u, 1)}{near}.")
+    if flown_text(report.surface_datasets):
+        warnings.append(f"{flown_text(report.surface_datasets)}.")
+    w = report.surface_worst
+    year = w.dataset.get("year") if w is not None and w.lidar and w.dataset else None
+    if isinstance(year, int) and time.gmtime().tm_year - year > OLD_LIDAR_YEARS:
+        warnings.append(f"The lidar at the worst point was flown in {year}; trees may be taller now.")
 
 
 def terrain_station_count(distance_m: float, stations: int) -> int:

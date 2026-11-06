@@ -333,14 +333,19 @@ function showResult(data, units, picks = [], feedHeights = []) {
       const w = sf.worst;
       let detail = "n/a";
       if (w && w.clearance !== null) {
-        const what = w.lidar ? `lidar surface ${hfmt(w.height_m)} above ground` : `${hfmt(sf.fallback_height_m)} trees, no lidar here`;
+        const what = w.lidar ? `lidar surface ${hfmt(w.height_m)} above ground${w.dataset ? `, ${esc(datasetLabel(w.dataset))} lidar` : ""}`
+          : `${hfmt(sf.fallback_height_m)} trees, no lidar here`;
         const side = w.offset_m ? `, ${dfmt(Math.abs(w.offset_m))} off the line of sight` : "";
         detail = `${w.clearance.toFixed(2)} \u00d7 r1 (${what}${side}) at ${dfmt(w.d_m, 2)}`;
       }
       const sources = sf.sources.length ? sf.sources.join(", ") : "no lidar";
+      const span = sf.flown;
+      const flown = !span ? "" : `<br><small>${span.oldest === span.newest ? `Lidar was flown in ${span.oldest}`
+        : `Lidar was flown between ${span.oldest} and ${span.newest}`}</small>`;
       rows.push(["Min clearance over lidar surface",
-        `<span class="badge ${sf.status}">${sf.status}</span> ${detail}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
-        + `every ${dfmt(sf.spacing_m)} across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
+        `<span class="badge ${sf.status}">${sf.status}</span> ${detail}${flown}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
+        + `every ${dfmt(sf.spacing_m)}${sf.near_spacing_m && sf.near_spacing_m < sf.spacing_m - 0.01 ? ` (every ${dfmt(sf.near_spacing_m)} near the sites)` : ""}`
+        + ` across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
         + `ignored within ${dfmt(sf.clearance_a_m)} of ${esc(a.name)} and ${dfmt(sf.clearance_b_m)} of ${esc(b.name)}</small>`]);
     }
   }
@@ -386,7 +391,8 @@ function drawProfile(r) {
     { d: D, name: b.name, ground: p[p.length - 1].ground_m, top: p[p.length - 1].los_m },
   ];
   const surface = r.surface && r.surface.enabled ? r.surface : null;
-  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface });
+  const trees = Boolean(r.trees && r.trees.enabled);
+  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface, trees });
   const feet = r.end_window_m / FEET;
   const win = resultUnits === "ft" ? (feet < 5280 ? `${feet.toFixed(0)} ft` : dfmt(r.end_window_m, 2))
     : (r.end_window_m < 1000 ? `${r.end_window_m.toFixed(0)} m` : dfmt(r.end_window_m, 2));
@@ -395,9 +401,11 @@ function drawProfile(r) {
   for (const [pts, from, svgSel, titleSel, title] of zoom) {
     const show = pts && pts.length > 1;
     $(svgSel).hidden = $(titleSel).hidden = !show;
+    if (readoutFor($(svgSel))) readoutFor($(svgSel)).hidden = !show;
     if (!show) continue;
     $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
-    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface });
+    const closeUp = surface && { ...surface, plot: (from === "a" ? surface.plot_a : surface.plot_b) || surface.plot };
+    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface: closeUp, trees });
   }
 }
 
@@ -434,6 +442,7 @@ function ensureMap() {
   }
   L.control.layers(bases, mapGroups, { collapsed: true }).addTo(map);
   L.control.scale({ metric: true, imperial: true }).addTo(map);
+  map.on("dragstart", () => $$(".map-views button").forEach((btn) => btn.classList.remove("active")));
   return map;
 }
 
@@ -480,7 +489,30 @@ function drawMap(r) {
     }
   }
   map.invalidateSize();
-  map.fitBounds(L.latLngBounds(r.map.los).pad(0.15));
+  mapReport = r;
+  $$(".map-views button").forEach((btn) => {
+    const site = { a: r.sites[0], b: r.sites[1] }[btn.dataset.view];
+    if (site) {
+      btn.textContent = site.name;
+      btn.title = `Zoom to ${site.name}`;
+    }
+  });
+  showMapView("path");
+}
+
+const SITE_ZOOM = 17;  // close enough to see buildings and treelines around a site
+let mapReport = null;
+
+function showMapView(view) {
+  if (!map || !mapReport) return;
+  $$(".map-views button").forEach((btn) => btn.classList.toggle("active", btn.dataset.view === view));
+  const site = { a: mapReport.sites[0], b: mapReport.sites[1] }[view];
+  if (site) map.setView([site.lat, site.lon], Math.min(SITE_ZOOM, map.getMaxZoom()));
+  else map.fitBounds(L.latLngBounds(mapReport.map.los).pad(0.15));
+}
+
+function setupMapViews() {
+  $$(".map-views button").forEach((btn) => btn.addEventListener("click", () => showMapView(btn.dataset.view)));
 }
 
 // Consecutive samples that have trees on them.
@@ -506,8 +538,15 @@ function surfaceRuns(p) {
   return runs.filter((r) => r.length > 1);
 }
 
+// "OLC Santiam 2018", or "Some Survey (2016)" when the name has no year in it.
+function datasetLabel(d) {
+  const name = d.name || "unnamed lidar";
+  return d.year && !name.includes(String(d.year)) ? `${name} (${d.year})` : name;
+}
+
 function surfaceTip(q, from) {
-  const what = q.lidar ? `lidar surface ${hfmt(q.height_m)} above ground` : "trees (no lidar here)";
+  const what = q.lidar ? `lidar surface ${hfmt(q.height_m)} above ground${q.dataset ? ` (${esc(datasetLabel(q.dataset))})` : ""}`
+    : "trees (no lidar here)";
   const side = q.offset_m ? `, ${dfmt(Math.abs(q.offset_m))} off the line of sight` : "";
   return `${what}${side}: ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(from)}`;
 }
@@ -584,7 +623,340 @@ function drawPlot(svg, p, opts) {
       parts.push(`<text class="offsite" x="${left ? L + 4 : W - R - 4}" y="${T - 10}" text-anchor="${left ? "start" : "end"}">${text}</text>`);
     }
   }
+  parts.push(`<g class="measure-cursor"></g>`);
   svg.innerHTML = parts.join("");
+  // what the measuring cursor needs: the same scales and data the picture was drawn from
+  svg._plot = {
+    x, y, d0, d1, L, R, W, T, B, H, p, sp, D, from: opts.from, masts: opts.masts,
+    mode: opts.surface ? "lidar" : opts.trees ? "trees" : "none",
+    dAt: (px) => d0 + ((px - L) / (W - L - R)) * span,
+  };
+  resetMeasure(svg);
+}
+
+// ----- Measuring cursor on the profile graphs -----
+
+const MEASURE_HINT = "Hover over the profile to measure at any point. Click to add a marker (drag to move it, \u00d7 to remove it); "
+  + "the arrow keys move the selected marker and Esc removes it.";
+const PIN_COLORS = ["#d6336c", "#1971c2", "#2f9e44", "#f08c00", "#7048e8", "#0c8599", "#e8590c", "#5c940d"];
+let nextPin = 0;  // markers take the next colour in turn, across all the graphs
+
+function hasValue(v) {
+  return v !== null && v !== undefined;
+}
+
+// The two points either side of d (the same point twice on an exact hit), or null outside them.
+function bracket(points, d) {
+  const n = points.length;
+  if (!n || d < points[0].d_m - 1e-6 || d > points[n - 1].d_m + 1e-6) return null;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].d_m <= d) lo = mid;
+    else hi = mid;
+  }
+  if (Math.abs(points[lo].d_m - d) < 1e-6) return [points[lo], points[lo]];
+  if (Math.abs(points[hi].d_m - d) < 1e-6) return [points[hi], points[hi]];
+  return [points[lo], points[hi]];
+}
+
+// Linear interpolation of key at d, as the graph draws it; null where either side has no value.
+function interp(points, d, key) {
+  const pair = bracket(points, d);
+  if (!pair) return null;
+  const [a, b] = pair;
+  if (!hasValue(a[key]) || !hasValue(b[key])) return null;
+  if (a === b || b.d_m === a.d_m) return a[key];
+  return a[key] + ((d - a.d_m) / (b.d_m - a.d_m)) * (b[key] - a[key]);
+}
+
+// The lidar (or fallback tree) top at d, only within one drawn run, like the blue/green fill.
+function surfaceTopAt(sp, d) {
+  const pair = bracket(sp, d);
+  if (!pair) return null;
+  const [a, b] = pair;
+  if (a.lidar !== b.lidar) return null;
+  const top = a === b || b.d_m === a.d_m ? a.peak_m : a.peak_m + ((d - a.d_m) / (b.d_m - a.d_m)) * (b.peak_m - a.peak_m);
+  return { top, station: d - a.d_m <= b.d_m - d ? a : b };
+}
+
+function measureAt(plot, d) {
+  const p = plot.p;
+  const m = {
+    d, ground: interp(p, d, "effective_m"), los: interp(p, d, "los_m"), zone: interp(p, d, "zone_bottom_m"),
+    sixty: interp(p, d, "r60_bottom_m"), top: null, topKind: null, dataset: null,
+  };
+  if (plot.mode === "trees") {
+    m.top = interp(p, d, "tree_top_m");
+    if (hasValue(m.top)) m.topKind = "tree";
+  } else if (plot.mode === "lidar") {
+    const s = surfaceTopAt(plot.sp, d);
+    if (s) {
+      m.top = s.top;
+      m.topKind = s.station.lidar ? "lidar" : "fallback";
+      m.dataset = s.station.dataset || null;
+    }
+  }
+  return m;
+}
+
+function cursorLine(plot, d, cls, color) {
+  const cx = plot.x(d).toFixed(1);
+  const style = color ? ` style="stroke:${color}"` : "";
+  return `<line class="cursor-line ${cls}"${style} x1="${cx}" x2="${cx}" y1="${plot.T}" y2="${plot.H - plot.B}"/>`;
+}
+
+function pinRemoveIcon(plot, pin) {
+  const cx = plot.x(pin.d).toFixed(1);
+  return `<g class="pin-x" data-pin="${pin.id}" transform="translate(${cx},${plot.T - 9})"><title>Remove this marker</title>`
+    + `<circle r="7" style="fill:${pin.color}"/><path d="M-3,-3L3,3M3,-3L-3,3"/></g>`;
+}
+
+function cursorDots(plot, m) {
+  const cx = plot.x(m.d).toFixed(1);
+  const dot = (v, cls) => (hasValue(v) ? `<circle class="cursor-dot ${cls}" cx="${cx}" cy="${plot.y(v).toFixed(1)}" r="4"/>` : "");
+  const topCls = m.topKind === "lidar" ? "lidar" : "trees";
+  return dot(m.ground, "ground") + dot(m.top, topCls) + dot(m.zone, "zone") + dot(m.sixty, "r60") + dot(m.los, "los");
+}
+
+// A gap between two heights: positive is clear, negative is how far the lower thing reaches past the line.
+function gapHtml(v, past) {
+  if (!hasValue(v)) return "n/a";
+  return v >= 0 ? hfmt(v) : `<span class="into">${hfmt(-v)} ${past}</span>`;
+}
+
+function whereText(plot, d) {
+  const [a, b] = plot.masts;
+  return plot.from === "b" ? `${dfmt(Math.max(0, plot.D - d), 2)} to ${b.name}` : `${dfmt(d, 2)} from ${a.name}`;
+}
+
+// One measurement in the readout: the live hover reading (pin null) or a saved marker.
+function readoutEntry(plot, m, pin) {
+  const [a, b] = plot.masts;
+  const from = `${dfmt(m.d, 2)} from ${esc(a.name)}`;
+  const to = `${dfmt(Math.max(0, plot.D - m.d), 2)} to ${esc(b.name)}`;
+  const swatch = pin ? `<span class="pin-swatch" style="background:${pin.color}"></span>` : '<span class="pin-swatch hover"></span>';
+  const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
+  const lines = [`${remove}${swatch}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
+  if (hasValue(m.ground)) {
+    lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
+      + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
+  }
+  if (hasValue(m.top) && hasValue(m.ground)) {
+    const name = { lidar: "lidar top", fallback: "tree top (no lidar here)", tree: "tree top" }[m.topKind];
+    const ds = m.dataset ? ` (${esc(datasetLabel(m.dataset))})` : "";
+    const cap = name.charAt(0).toUpperCase() + name.slice(1);
+    lines.push(`Ground to ${name}: ${hfmt(m.top - m.ground)}${ds}`);
+    lines.push(`${cap} to Fresnel zone bottom: ${gapHtml(m.zone - m.top, "into the zone")}${m.zone >= m.top ? " clear" : ""}`
+      + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.top, "past the 60% line")}${m.sixty >= m.top ? " clear" : ""}`);
+  } else if (plot.mode !== "none") {
+    lines.push("No trees or lidar checked here.");
+  }
+  const style = pin ? ` style="border-left-color:${pin.color}"` : "";
+  return `<div class="measure-entry${pin ? "" : " hover"}"${style}>${lines.join("<br>")}</div>`;
+}
+
+function readoutFor(svg) {
+  const el = svg.nextElementSibling;
+  return el && el.classList.contains("measure-readout") ? el : null;
+}
+
+function renderMeasure(svg) {
+  const st = svg._measure, plot = svg._plot;
+  const g = svg.querySelector(".measure-cursor");
+  if (!st || !plot || !g) return;
+  const hovering = hasValue(st.hover) && st.dragging === null;
+  const pins = [...st.pins].sort((p, q) => p.d - q.d);
+  let html = "";
+  for (const pin of pins) {
+    html += cursorLine(plot, pin.d, `pinned${pin.id === st.selected ? " selected" : ""}`, pin.color)
+      + cursorDots(plot, measureAt(plot, pin.d)) + pinRemoveIcon(plot, pin);
+  }
+  if (hovering) html += cursorLine(plot, st.hover, "hover") + cursorDots(plot, measureAt(plot, st.hover));
+  g.innerHTML = html;
+  const readout = readoutFor(svg);
+  if (readout) {
+    const entries = (hovering ? [readoutEntry(plot, measureAt(plot, st.hover), null)] : [])
+      .concat(pins.map((pin) => readoutEntry(plot, measureAt(plot, pin.d), pin)));
+    if (entries.length) readout.innerHTML = entries.join("");
+    else readout.textContent = MEASURE_HINT;
+  }
+  if (hovering) hoverSource = svg;
+  else if (hoverSource === svg) hoverSource = null;
+  syncMapMarkers();
+}
+
+// ----- The measuring markers on the map -----
+
+const MEASURED_PLOTS = ["#profile-main", "#profile-a", "#profile-b"];
+let hoverSource = null;  // the profile graph being hovered, whose cursor the faded map marker follows
+let mapHover = null;
+const mapPins = new Map();  // marker id -> its map marker
+
+function latLonAt(plot, d) {
+  const lat = interp(plot.p, d, "lat"), lon = interp(plot.p, d, "lon");
+  return hasValue(lat) && hasValue(lon) ? [lat, lon] : null;
+}
+
+function syncMapMarkers() {
+  if (!map) return;
+  const hs = hoverSource && hoverSource._measure;
+  const hoverAt = hs && hasValue(hs.hover) ? latLonAt(hoverSource._plot, hs.hover) : null;
+  if (!hoverAt) {
+    if (mapHover) mapHover.remove();
+    mapHover = null;
+  } else {
+    if (!mapHover) {
+      mapHover = L.circleMarker(hoverAt, { radius: 7, color: "#1d232b", weight: 2, fillColor: "#ffd43b", fillOpacity: 0.6,
+        dashArray: "3 3", interactive: false, pane: "markerPane" }).addTo(map);
+      mapHover.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+    }
+    mapHover.setLatLng(hoverAt);
+    mapHover.setTooltipContent(esc(whereText(hoverSource._plot, hs.hover)));
+    if (!mapHover.isTooltipOpen()) mapHover.openTooltip();
+  }
+  const live = new Set();
+  for (const sel of MEASURED_PLOTS) {
+    const svg = $(sel), st = svg._measure, plot = svg._plot;
+    if (!st || !plot || svg.hidden) continue;
+    for (const pin of st.pins) {
+      const at = latLonAt(plot, pin.d);
+      if (!at) continue;
+      live.add(pin.id);
+      let mk = mapPins.get(pin.id);
+      if (!mk) {
+        mk = L.circleMarker(at, { radius: 7, color: "#fff", weight: 2, fillColor: pin.color, fillOpacity: 1,
+          pane: "markerPane" }).addTo(map);
+        mk.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+        mapPins.set(pin.id, mk);
+      }
+      mk.setLatLng(at);
+      mk.setTooltipContent(esc(whereText(plot, pin.d)));
+    }
+  }
+  for (const [id, mk] of mapPins) {
+    if (!live.has(id)) {
+      mk.remove();
+      mapPins.delete(id);
+    }
+  }
+}
+
+function resetMeasure(svg) {
+  svg._measure = { hover: null, pins: [], selected: null, dragging: null };
+  renderMeasure(svg);
+}
+
+function removePin(svg, id) {
+  const st = svg._measure;
+  st.pins = st.pins.filter((pin) => pin.id !== id);
+  if (st.selected === id) st.selected = st.pins.length ? st.pins[st.pins.length - 1].id : null;
+  if (st.dragging === id) st.dragging = null;
+  renderMeasure(svg);
+}
+
+function svgX(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+}
+
+// The marker within a few pixels of the pointer, to drag it instead of adding another.
+function pinNear(svg, ev) {
+  const plot = svg._plot, px = svgX(svg, ev);
+  let best = null;
+  for (const pin of svg._measure.pins) {
+    const dx = Math.abs(plot.x(pin.d) - px);
+    if (dx <= 6 && (!best || dx < best.dx)) best = { pin, dx };
+  }
+  return best ? best.pin : null;
+}
+
+function measureDistance(svg, ev) {
+  const plot = svg._plot;
+  return plot.dAt(Math.min(plot.W - plot.R, Math.max(plot.L, svgX(svg, ev))));
+}
+
+// The next drawn sample (profile or lidar) from d, `steps` along in direction dir.
+function stepDistance(plot, d, dir, steps) {
+  const ds = [...new Set(plot.p.map((q) => q.d_m).concat(plot.sp.map((q) => q.d_m)))]
+    .filter((v) => v >= plot.d0 - 1e-6 && v <= plot.d1 + 1e-6).sort((x, y) => x - y);
+  if (!ds.length) return d;
+  let i = dir > 0 ? ds.findIndex((v) => v > d + 1e-6) : ds.length - 1 - [...ds].reverse().findIndex((v) => v < d - 1e-6);
+  if (i < 0 || i >= ds.length) i = dir > 0 ? ds.length - 1 : 0;
+  return ds[Math.max(0, Math.min(ds.length - 1, i + dir * (steps - 1)))];
+}
+
+function addPin(svg, d) {
+  const pin = { id: nextPin, d, color: PIN_COLORS[nextPin % PIN_COLORS.length] };
+  nextPin += 1;
+  svg._measure.pins.push(pin);
+  return pin;
+}
+
+function setupMeasure(svg) {
+  const ready = () => svg._plot && svg._measure;
+  const pinById = (id) => svg._measure.pins.find((pin) => pin.id === id);
+  svg.addEventListener("pointermove", (ev) => {
+    if (!ready()) return;
+    const st = svg._measure, d = measureDistance(svg, ev);
+    if (st.dragging !== null && pinById(st.dragging)) pinById(st.dragging).d = d;
+    else st.hover = d;
+    renderMeasure(svg);
+  });
+  svg.addEventListener("pointerleave", () => {
+    if (!ready() || svg._measure.dragging !== null) return;
+    svg._measure.hover = null;
+    renderMeasure(svg);
+  });
+  svg.addEventListener("pointerdown", (ev) => {
+    if (!ready() || ev.button !== 0) return;
+    const remove = ev.target.closest && ev.target.closest(".pin-x");
+    if (remove) {
+      ev.preventDefault();
+      removePin(svg, Number(remove.dataset.pin));
+      return;
+    }
+    const st = svg._measure;
+    const pin = pinNear(svg, ev) || addPin(svg, measureDistance(svg, ev));
+    Object.assign(st, { selected: pin.id, dragging: pin.id, hover: null });
+    svg.setPointerCapture(ev.pointerId);
+    svg.focus({ preventScroll: true });
+    renderMeasure(svg);
+  });
+  const stopDrag = (ev) => {
+    if (!ready() || svg._measure.dragging === null) return;
+    svg._measure.dragging = null;
+    if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId);
+    renderMeasure(svg);
+  };
+  svg.addEventListener("pointerup", stopDrag);
+  svg.addEventListener("pointercancel", stopDrag);
+  svg.addEventListener("keydown", (ev) => {
+    if (!ready()) return;
+    const st = svg._measure, plot = svg._plot;
+    const selected = pinById(st.selected);
+    if ((ev.key === "Escape" || ev.key === "Delete" || ev.key === "Backspace") && selected) {
+      removePin(svg, selected.id);
+    } else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+      const dir = ev.key === "ArrowRight" ? 1 : -1;
+      const pin = selected || addPin(svg, hasValue(st.hover) ? st.hover : (plot.d0 + plot.d1) / 2);
+      pin.d = stepDistance(plot, pin.d, dir, ev.shiftKey ? 10 : 1);
+      Object.assign(st, { selected: pin.id, hover: null });
+      renderMeasure(svg);
+    } else {
+      return;
+    }
+    ev.preventDefault();
+  });
+  const readout = readoutFor(svg);
+  if (readout) {
+    readout.addEventListener("click", (ev) => {
+      const button = ev.target.closest(".pin-remove");
+      if (button && ready()) removePin(svg, Number(button.dataset.pin));
+    });
+  }
 }
 
 async function submit(ev) {
@@ -750,6 +1122,8 @@ function init() {
   updateLookupHint();
   loadSources();
   loadMapConfig();
+  setupMapViews();
+  MEASURED_PLOTS.forEach((sel) => setupMeasure($(sel)));
   initSites();
 }
 

@@ -21,7 +21,7 @@
       <button type="button" role="tab" data-mode="node" aria-selected="true">Node selection</button>
       <button type="button" role="tab" data-mode="link" aria-selected="false">Link selection</button>
     </div>
-    <button type="button" id="copy-link" class="linkish">Copy link to these sites</button>
+    <a id="copy-link" class="linkish" href="./" title="Click to copy; right-click for the link's menu">Copy link to these sites</a>
     <span id="copy-status" aria-live="polite"></span>
     <label class="linkish nodes-file">Load a nodes.json file
       <input id="nodes-file" type="file" accept=".json,application/json">
@@ -179,17 +179,25 @@
   <ul id="warnings" class="warnings"></ul>
   <div id="map-box">
     <h3>Map</h3>
+    <div class="mode-tabs map-views" role="group" aria-label="Map view">
+      <button type="button" data-view="a">Site A</button>
+      <button type="button" data-view="b">Site B</button>
+      <button type="button" data-view="path" class="active">Whole path</button>
+    </div>
     <div id="map" role="region" aria-label="Map of the link"></div>
     <p class="legend"><span class="lg zone-fill"></span>Fresnel zone (top-down) <span class="lg sixty-fill"></span>60% zone (in the layer menu) <span class="lg los"></span>line of sight <span class="lg-dot"></span>terrain below 60% <span class="lg-dot tree"></span>trees or lidar surface below 60% &middot; click the map to zoom with the scroll wheel</p>
   </div>
   <div id="profile-box">
     <h3>Terrain profile</h3>
     <h4 id="profile-title-main" class="plot-title">Whole path</h4>
-    <svg id="profile-main" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile, whole path"></svg>
+    <svg id="profile-main" class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" aria-label="Terrain profile, whole path"></svg>
+    <div class="measure-readout" aria-live="polite"></div>
     <h4 id="profile-title-a" class="plot-title"></h4>
-    <svg id="profile-a" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site A"></svg>
+    <svg id="profile-a" class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" aria-label="Terrain profile next to site A"></svg>
+    <div class="measure-readout" aria-live="polite"></div>
     <h4 id="profile-title-b" class="plot-title"></h4>
-    <svg id="profile-b" class="profile-plot" viewBox="0 0 800 260" role="img" aria-label="Terrain profile next to site B"></svg>
+    <svg id="profile-b" class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" aria-label="Terrain profile next to site B"></svg>
+    <div class="measure-readout" aria-live="polite"></div>
     <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees (fixed height) <span class="lg-lidar"></span>lidar surface <span class="lg-dot tree"></span>clearance over trees or lidar below 60%</p>
   </div>
 </section>

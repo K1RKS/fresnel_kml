@@ -54,6 +54,8 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .mode-tabs button { border: none; background: none; padding: 7px 16px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .mode-tabs button + button { border-left: 1px solid var(--line); }
 .mode-tabs button.active { background: var(--accent); color: #fff; }
+.map-views { margin-bottom: 8px; max-width: 100%; flex-wrap: wrap; }
+.map-views button { max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mode-bar .linkish { margin-top: 0; }
 #copy-status { font-size: 0.82rem; color: var(--clear); }
 .nodes-file input { display: none; }
@@ -80,6 +82,8 @@ input.overridden:not([type=checkbox]), select.overridden { border-color: var(--m
   background: none; border: none; color: var(--accent); padding: 0; margin-top: 6px;
   cursor: pointer; font-size: 0.82rem; text-align: left;
 }
+a.linkish { display: inline-block; text-decoration: none; }
+a.linkish:hover, a.linkish:focus-visible { text-decoration: underline; }
 .color-pick { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-top: 8px; }
 .color-pick input[type=color] { width: 44px; height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0; }
 .color-pick input[type=color]:disabled { opacity: 0.35; }
@@ -135,9 +139,36 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg-lidar { display: inline-block; width: 18px; height: 10px; background: rgba(30, 122, 210, 0.25); border-top: 1px solid rgba(30, 122, 210, 0.8); margin-right: 4px; vertical-align: middle; }
 .profile-plot .lidar { fill: rgba(30, 122, 210, 0.25); stroke: rgba(30, 122, 210, 0.8); stroke-width: 1; }
 .profile-plot .tree-obstruction { fill: none; stroke: #b02a37; stroke-width: 2; }
+.profile-plot { cursor: crosshair; touch-action: pan-y; }
+.profile-plot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.profile-plot .cursor-line { stroke: #1d232b; stroke-width: 1; pointer-events: none; }
+.profile-plot .cursor-line.hover { stroke-dasharray: 4 3; opacity: 0.7; }
+.profile-plot .cursor-line.pinned { stroke-width: 1.5; }
+.profile-plot .cursor-line.pinned.selected { stroke-width: 2.5; }
+.profile-plot .pin-x { cursor: pointer; }
+.profile-plot .pin-x circle { stroke: #fff; stroke-width: 1.5; }
+.profile-plot .pin-x path { stroke: #fff; stroke-width: 1.8; stroke-linecap: round; }
+.profile-plot .pin-x:hover circle { stroke: #1d232b; }
+.profile-plot .cursor-dot { stroke: #fff; stroke-width: 1.5; pointer-events: none; }
+.profile-plot .cursor-dot.ground { fill: #8a6d3b; }
+.profile-plot .cursor-dot.trees { fill: #228b22; }
+.profile-plot .cursor-dot.lidar { fill: #1e7ad2; }
+.profile-plot .cursor-dot.zone { fill: #2b8a3e; }
+.profile-plot .cursor-dot.r60 { fill: #e8590c; }
+.profile-plot .cursor-dot.los { fill: #c9a000; }
+.measure-readout { font-size: 0.84rem; color: var(--muted); margin: 4px 0 10px; min-height: 1.3em; line-height: 1.5; }
+.measure-readout strong { color: var(--ink); font-weight: 600; }
+.measure-readout .into { color: var(--blocked); font-weight: 600; }
+.measure-entry { border-left: 3px solid var(--line); padding: 1px 0 1px 8px; margin: 4px 0; }
+.measure-entry.hover { border-left-style: dashed; border-left-color: #c9a000; }
+.pin-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.pin-swatch.hover { background: #ffd43b; box-shadow: inset 0 0 0 1px #1d232b; }
+.pin-remove { float: right; border: none; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0 4px; cursor: pointer; }
+.pin-remove:hover { color: var(--blocked); }
 .trees-row { margin-top: 4px; }
 #map { height: 440px; border: 1px solid var(--line); border-radius: 6px; }
 .leaflet-tooltip.site-tip { font-weight: 600; }
+.leaflet-tooltip.cursor-tip { font-size: 0.78rem; padding: 2px 6px; }
 .lg.zone-fill { height: 10px; background: rgba(0, 200, 0, 0.35); border: 1px solid #2b8a3e; }
 .lg.sixty-fill { height: 10px; background: rgba(255, 165, 0, 0.3); border: 1px solid #e8590c; }
 .trees-row input:disabled { opacity: 0.5; }

@@ -667,12 +667,18 @@ function setupModes() {
 
 function save() {
   if (!stateReady) return;
+  refreshLink();
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1, mode: siteState.mode, units: pageUnits(),
       sites: siteState.sites, freq_ov: siteState.freq_ov, trees: treeState() }));
   } catch (err) {
     /* storage full or disabled: the page still works, it just won't remember */
   }
+}
+
+// The link's own address is the share URL, so "Copy link address" and opening it in a new tab work too.
+function refreshLink() {
+  $("#copy-link").href = toUrl();
 }
 
 function treeState() {
@@ -760,7 +766,10 @@ function fromUrl() {
   return st;
 }
 
-async function copyLink() {
+async function copyLink(ev) {
+  if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;  // let the browser open it
+  ev.preventDefault();
+  refreshLink();
   const url = toUrl();
   const status = $("#copy-status");
   try {
@@ -905,6 +914,9 @@ function initSites() {
     syncFreq();
   });
   $("#copy-link").addEventListener("click", copyLink);
+  for (const type of ["contextmenu", "mouseenter", "focus", "pointerdown"]) {
+    $("#copy-link").addEventListener(type, () => { if (stateReady) refreshLink(); });
+  }
   $("#nodes-file").addEventListener("change", (ev) => {
     const file = ev.target.files && ev.target.files[0];
     ev.target.value = "";
