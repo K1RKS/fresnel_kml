@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from fresnelkml import httpjson
-from fresnelkml.webapi import MAX_BODY, handle_request, safe_filename
+from fresnelkml.webapi import MAX_BODY, handle_request, run_progress, safe_filename
 
 
 def body(**overrides):
@@ -18,6 +18,21 @@ def body(**overrides):
 
 def headers(resp):
     return dict(resp.headers)
+
+
+def test_run_progress_stays_on_the_caller_thread(local_config):
+    seen = []
+
+    def progress(stage, done=None, total=None):
+        seen.append((stage, done, total))
+
+    result = run_progress(body(format="json", progress=True, options={"terrain_check": True}),
+                          {"FRESNEL_CONFIG": local_config}, progress)
+    assert [stage for stage, _, _ in seen][0] == "start"
+    assert "ground" in [stage for stage, _, _ in seen] and seen[-1][0] == "report"
+    assert "kml" in result["result"] and result["result"]["report"]["terrain_checked"]
+    failed = run_progress(b"not json", {"FRESNEL_CONFIG": local_config}, lambda *a, **k: seen.append("x"))
+    assert failed["status"] == 400 and seen[-1] != "x"
 
 
 def test_kml_response(local_config):

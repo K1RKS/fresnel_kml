@@ -10,7 +10,8 @@
 <body>
 <header>
   <h1>Fresnel Zone KML Generator</h1>
-  <p>Enter two radio sites to get a Google Earth Pro KML of the line of sight and the Fresnel zone, with an optional terrain clearance check.</p>
+  <p>Enter two radio sites to get a Google Earth Pro KML of the line of sight and the Fresnel zone, with an optional terrain clearance check. The analysis runs in this browser.</p>
+  <p id="engine-status" class="hint" role="status">Loading the analysis engine…</p>
 </header>
 
 <main>
@@ -22,6 +23,10 @@
     </div>
     <button type="button" id="copy-link" class="linkish">Copy link to these sites</button>
     <span id="copy-status" aria-live="polite"></span>
+    <label class="linkish nodes-file">Load a nodes.json file
+      <input id="nodes-file" type="file" accept=".json,application/json">
+    </label>
+    <span id="nodes-file-status" aria-live="polite"></span>
   </div>
   <div class="sites">
     <fieldset class="site" data-site="site_a">
@@ -132,7 +137,7 @@
         <label><span>Close-up profiles (<span class="unit">m</span>)</span> <input id="end_window" type="number" step="any" value="500" min="10" title="How much of the path next to each site the First / Last close-up profiles cover"></label>
       </div>
       <div class="row">
-        <label>Elevation source <select id="elev_source"><option value="auto">auto (server chain)</option></select></label>
+        <label>Elevation source <select id="elev_source"><option value="auto">auto</option></select></label>
         <label>Stations <input id="stations" type="number" min="2" max="512" value="64"></label>
         <label>Ring points <input id="ring_points" type="number" min="6" max="72" value="24"></label>
         <label>Style
@@ -191,7 +196,7 @@
 
 <details class="api-doc">
   <summary>API</summary>
-  <p><code>POST api/fresnel.cgi</code> with <code>Content-Type: application/json</code>. The response is the KML file, or JSON with <code>"format": "json"</code>.</p>
+  <p>The page answers these requests itself, in the browser. The same JSON is what the optional server script <code>POST api/fresnel.cgi</code> accepts (<code>Content-Type: application/json</code>). The response is the KML file, or JSON with <code>"format": "json"</code>.</p>
 <pre>{
   "site_a": {"name": "TowerA", "lat": 37.0, "lon": -122.0, "agl_m": 30},
   "site_b": {"name": "TowerB", "position": "10S 597811 4100985", "asl_m": 412.5},
@@ -199,12 +204,13 @@
   "format": "kml"
 }</pre>
 <pre id="curl-example">curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/api/fresnel.cgi -o link.kml</pre>
-  <p>Each site takes <code>lat</code>/<code>lon</code> (decimal degrees by default; DMS and DDM strings also work) or one <code>position</code> string, and exactly one of <code>agl_m</code> or <code>asl_m</code>. <code>GET api/fresnel.cgi?sources</code> lists elevation and lidar surface sources; <code>GET api/fresnel.cgi?parse=TEXT</code> decodes a coordinate; <code>GET api/fresnel.cgi?ground&amp;lat=LAT&amp;lon=LON</code> (or <code>&amp;position=TEXT</code>) looks up the ground elevation at one point.</p>
+  <p>Each site takes <code>lat</code>/<code>lon</code> (decimal degrees by default; DMS and DDM strings also work) or one <code>position</code> string, and exactly one of <code>agl_m</code> or <code>asl_m</code>. <code>GET api/fresnel.cgi?sources</code> lists elevation and lidar surface sources; <code>GET api/fresnel.cgi?parse=TEXT</code> decodes a coordinate; <code>GET api/fresnel.cgi?ground&amp;lat=LAT&amp;lon=LON</code> (or <code>&amp;position=TEXT</code>) looks up the ground elevation at one point. <code>POST api/fresnel.cgi?nodes=FILENAME</code> with a Nodographer <code>nodes.json</code> body returns the same node list as <code>GET ?nodes</code>.</p>
 </details>
 </main>
 
 <footer>Coordinates are WGS-84. Heights above sea level need no elevation lookup unless the terrain check is on.</footer>
 <script src="assets/leaflet/leaflet.js"></script>
+<script src="api.js" data-engine="engine.js"></script>
 <script src="sites.js"></script>
 <script src="app.js"></script>
 </body>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -132,12 +133,28 @@ class ImageService:
         return result
 
 
+def _run_serial(tasks: list, deadline: float | None) -> list:
+    """Same result slots as run_parallel, on this thread. Pyodide has no real threads."""
+    results: list = [None] * len(tasks)
+    for i, task in enumerate(tasks):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        try:
+            results[i] = task()
+        except Exception as exc:  # noqa: BLE001 - reported per batch
+            results[i] = exc
+    return results
+
+
 def run_parallel(tasks: list, threads: int, deadline: float | None) -> list:
     """Run callables on daemon threads; each slot gets its result, its exception, or None if unfinished.
 
     Daemon threads let a CGI process exit as soon as its answer is written, even if a slow
-    request is still waiting on the network.
+    request is still waiting on the network. The browser build has no threads, so it runs the
+    tasks one after another on the worker that called it.
     """
+    if sys.platform == "emscripten":
+        return _run_serial(tasks, deadline)
     results: list = [None] * len(tasks)
     pending: queue.Queue = queue.Queue()
     for i in range(len(tasks)):

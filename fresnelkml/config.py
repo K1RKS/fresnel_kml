@@ -11,7 +11,7 @@ from . import cache as cache_mod
 from .arcgis import UNIT_SCALE
 from .cache import DEFAULT_MAX_MB, CacheSet, slug
 from .elevation import (ArcGISImageProvider, ElevationChain, GoogleProvider, OpenElevationProvider,
-                        OpenTopoDataProvider, USGSProvider)
+                        OpenMeteoProvider, OpenTopoDataProvider, USGSProvider)
 from .local_hgt import LocalHgtProvider
 
 DEFAULT_CONFIG_PATH = "/etc/fresnelkml/config.json"
@@ -76,7 +76,7 @@ DEFAULT_CONFIG = {
     },
 }
 
-SOURCE_TYPES = ("arcgis_image", "opentopodata", "open-elevation", "usgs", "google", "local_hgt")
+SOURCE_TYPES = ("arcgis_image", "opentopodata", "open-meteo", "open-elevation", "usgs", "google", "local_hgt")
 
 
 class ConfigError(ValueError):
@@ -370,8 +370,9 @@ def _validate_source(entry, index: int) -> dict:
             raise ConfigError(f"elevation.chain[{index}] (arcgis_image) needs a 'url'")
         if out.get("units", "m") not in UNIT_SCALE:
             raise ConfigError(f"elevation.chain[{index}].units must be one of {', '.join(UNIT_SCALE)}")
-        if "retries" in out and (not isinstance(out["retries"], int) or out["retries"] < 0):
-            raise ConfigError(f"elevation.chain[{index}].retries must be a non-negative integer")
+    if "retries" in out and (not isinstance(out["retries"], int) or isinstance(out["retries"], bool)
+                             or out["retries"] < 0):
+        raise ConfigError(f"elevation.chain[{index}].retries must be a non-negative integer")
     if "url" in out and not (isinstance(out["url"], str) and out["url"].startswith(("http://", "https://"))):
         raise ConfigError(f"elevation.chain[{index}].url must be an http(s) URL")
     for key in ("batch",):
@@ -429,6 +430,13 @@ def load_config(path: str | None = None, env=None) -> Config:
     return parse_config(data, target)
 
 
+def _with_retries(provider, spec: dict):
+    """A per-source `retries` overrides the chain default. Absent means leave the provider's own."""
+    if "retries" in spec:
+        provider.retries = spec["retries"]
+    return provider
+
+
 def make_provider(spec: dict, timeout_s: float = 10.0, env=None):
     kwargs = {k: v for k, v in spec.items() if k not in ("name", "type")}
     stype, name = spec["type"], spec["name"]
@@ -440,13 +448,16 @@ def make_provider(spec: dict, timeout_s: float = 10.0, env=None):
         return ArcGISImageProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})
     if stype == "opentopodata":
         allowed = {"url", "datasets", "batch", "min_interval_s", "timeout_s"}
-        return OpenTopoDataProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})
+        return _with_retries(OpenTopoDataProvider(name, **{k: v for k, v in kwargs.items() if k in allowed}), spec)
+    if stype == "open-meteo":
+        allowed = {"url", "batch", "min_interval_s", "timeout_s"}
+        return _with_retries(OpenMeteoProvider(name, **{k: v for k, v in kwargs.items() if k in allowed}), spec)
     if stype == "open-elevation":
         allowed = {"url", "batch", "min_interval_s", "timeout_s"}
-        return OpenElevationProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})
+        return _with_retries(OpenElevationProvider(name, **{k: v for k, v in kwargs.items() if k in allowed}), spec)
     if stype == "usgs":
         allowed = {"url", "min_interval_s", "timeout_s"}
-        return USGSProvider(name, **{k: v for k, v in kwargs.items() if k in allowed})
+        return _with_retries(USGSProvider(name, **{k: v for k, v in kwargs.items() if k in allowed}), spec)
     if stype == "google":
         allowed = {"url", "key_env", "key", "batch", "min_interval_s", "timeout_s"}
         return GoogleProvider(name, env=env, **{k: v for k, v in kwargs.items() if k in allowed})

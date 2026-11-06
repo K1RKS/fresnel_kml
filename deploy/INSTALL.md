@@ -1,6 +1,6 @@
-# Installing the Fresnel KML web service on NGINX
+# Installing the Fresnel KML page on NGINX
 
-The service is one self-contained folder: a static page plus a Python CGI script run by fcgiwrap. It needs only `nginx`, `fcgiwrap` and `python3` (3.10 or newer) on the server; no pip packages are needed.
+The page is one self-contained folder of static files. The analysis runs in the visitor's browser (Pyodide), so the server does not need Python or fcgiwrap for the page itself. An optional CGI script in the same folder still answers the HTTP API for scripts; that part needs `nginx`, `fcgiwrap` and `python3` (3.10 or newer), and no pip packages.
 
 ## 1. Build the folder (on any machine with this repository)
 
@@ -8,12 +8,22 @@ The service is one self-contained folder: a static page plus a Python CGI script
 python3 tools/build_site.py
 ```
 
-This creates `dist/site/` and `dist/fresnel-site.tar.gz`.
+The first run downloads the pinned Pyodide runtime (about 15 MB) into `web/pyodide/`. This creates `dist/site/` and `dist/fresnel-site.tar.gz`.
 
 ## 2. One-time server setup
 
+For the page alone:
+
 ```bash
-sudo apt install nginx fcgiwrap python3
+sudo apt install nginx
+```
+
+Copy the folder into the web root (step 3) and open `http://SERVER/site/`. Nginx must serve `lib/fresnelkml/` and `pyodide/` as static files; the browser loads the Python package and the WebAssembly runtime from there. `.wasm` should be `application/wasm` (the default in Nginx 1.21 and later).
+
+The optional CGI API needs fcgiwrap as well:
+
+```bash
+sudo apt install fcgiwrap python3
 ```
 
 fcgiwrap listens on `/run/fcgiwrap.socket` and runs as `www-data`.
@@ -24,7 +34,7 @@ Copy the blocks from [nginx-fresnel.conf](nginx-fresnel.conf) into your site's `
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-The `location /site/lib/ { deny all; }` block stops NGINX from serving the Python code as files. The `fastcgi_param NO_BUFFERING 1;` line makes Debian/Ubuntu's fcgiwrap pass the page's progress lines on as they're written; without it the progress bar only moves at the end.
+`lib/` must stay reachable: the page fetches the Python package from there and runs it in Pyodide. The `fastcgi_param NO_BUFFERING 1;` line matters only for the optional CGI API. It makes Debian/Ubuntu's fcgiwrap pass that API's progress lines on as they're written.
 
 Recommended: create the lookup cache folder, which turns on caching of elevation and lidar lookups (see [section 7](#7-optional-local-cache)):
 
@@ -38,7 +48,7 @@ sudo install -d -o www-data -g www-data /var/cache/fresnelkml
 sudo tar xzf fresnel-site.tar.gz -C /var/www/html/
 ```
 
-That's all an upgrade needs. Nothing has to be restarted, because every API request starts a fresh Python process.
+That's all an upgrade of the page needs. Nothing has to be restarted. The optional CGI API also needs no restart, because every request starts a fresh Python process.
 
 To deploy from another machine with rsync instead (here into a site at `/fresnel_kml/`; build with `--name fresnel_kml`):
 
@@ -59,11 +69,13 @@ curl -s -X POST -H 'Content-Type: application/json' \
   http://localhost/site/api/fresnel.cgi -o test.kml
 ```
 
-Then open `http://SERVER/site/` in a browser.
+Then open `http://SERVER/site/` in a browser. The first load fetches the WebAssembly runtime (about 15 MB) from this folder.
+
+The page reads the `config.json` that was built into the folder, not `/etc/fresnelkml/config.json`. Edit that copy and reload to change what the page uses. `/etc/fresnelkml/config.json` applies to the command line and to the optional CGI API.
 
 ## 4. Optional: elevation sources
 
-With no config file, the server looks up ground elevation from the USGS 3DEP image service, then the public OpenTopoData server, falling back to Open-Elevation. To change that, create `/etc/fresnelkml/config.json` from [config.example.json](config.example.json) and edit the `chain` list. Sources are tried in order, per point.
+With no config file, the CGI API and the command line look up ground elevation from the USGS 3DEP image service, then the public OpenTopoData server, falling back to Open-Elevation. The page's shipped `config.json` adds Open-Meteo before Open-Elevation, because the public OpenTopoData API does not allow browser requests. To change the CGI API, create `/etc/fresnelkml/config.json` from [config.example.json](config.example.json) and edit the `chain` list. Sources are tried in order, per point. `open-meteo` is a valid chain type (Open-Meteo's elevation endpoint, global, about 90 m, and it allows browser requests).
 
 - `arcgis_image` with a `url`: an ArcGIS image service sampled with `getSamples`, such as USGS 3DEP. `units` is `m`, `ft` or `ftUS`; `retries` defaults to 0 and `timeout_s` should allow for slow responses (3DEP can take 10 to 20 s for a long path).
 - `opentopodata` with a `url`: the public server or your own (`http://10.0.0.5:5000/v1`). Set `min_interval_s` to 0 for your own server.
@@ -122,7 +134,7 @@ The public OpenTopoData limits (1 request/s, 1000/day) are shared by everyone us
 
 ## 6. Optional: mesh node feeds
 
-The page's "Mesh node" picker fills Site A and Site B from [Nodographer](https://github.com/K1RKS/nodographer) `nodes.json` feeds. Without a `nodes` section the server uses the K1RKS MeshMap feed. To use other feeds, or several, list them in `/etc/fresnelkml/config.json`:
+The page's "Mesh node" picker fills Site A and Site B from [Nodographer](https://github.com/K1RKS/nodographer) `nodes.json` feeds. The page's feeds are the `nodes` section of the site's `config.json`. Without a `nodes` section the CGI API uses the K1RKS MeshMap feed. To use other feeds, or several, list them:
 
 ```json
 "nodes": {
@@ -135,7 +147,7 @@ The page's "Mesh node" picker fills Site A and Site B from [Nodographer](https:/
 }
 ```
 
-- The server fetches the feeds itself, so the browser doesn't need to reach them and the feed host needs no CORS headers. A `*.local.mesh` feed works when the server is on the mesh. Only the URLs in this file are ever fetched.
+- The page fetches each feed from the browser, so the feed's host must send `Access-Control-Allow-Origin` (or the page must be served from the same origin). The K1RKS MeshMap feed does not send that header today; add `add_header Access-Control-Allow-Origin *;` on its `nodes.json` location, or host this site on `meshmap.k1rks.me`. Without it the remote list stays empty. **Load a nodes.json file** on the page reads a Nodographer file the visitor already has (up to 32 MB) and needs no CORS header; that copy wins for any node id it shares with a remote feed, and it is not stored on the server. The optional CGI API still fetches feeds on the server, so a `*.local.mesh` feed works there when the server is on the mesh and the feed needs no CORS header. Only the URLs in the config are ever fetched. `POST api/fresnel.cgi?nodes=FILENAME` accepts the same file.
 - When the same node appears in more than one feed, the first feed in the list wins.
 - Each feed is cached for `cache_ttl_s` seconds (default 300) in the cache folder (`cache.dir`), or in the system temp directory when there isn't one. If a feed can't be fetched, the last cached copy is used and the page shows a warning.
 - `timeout_s` defaults to `elevation.timeout_s`.

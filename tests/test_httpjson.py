@@ -1,5 +1,7 @@
 import json
+import sys
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -7,6 +9,8 @@ import pytest
 import fresnelkml.httpjson as httpjson_module
 
 from conftest import REAL_GET_JSON
+
+REAL_POST_FORM = httpjson_module.post_form_json
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -46,3 +50,48 @@ def test_get_json_both_transports(server, monkeypatch, use_requests):
                             "/v1/srtm30m?locations=37.000000%2C-122.000000%7C37.1%2C-122.1")
     with pytest.raises(httpjson_module.HttpError, match="503"):
         REAL_GET_JSON(f"{server}/fail")
+
+
+def test_emscripten_uses_pyxhr_without_user_agent(monkeypatch):
+    calls = []
+
+    class Response:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self._payload = payload
+
+        def json(self):
+            if not isinstance(self._payload, (dict, list)):
+                raise ValueError("not json")
+            return self._payload
+
+    class Pyxhr:
+        @staticmethod
+        def get(url, **kwargs):
+            calls.append(("GET", url, kwargs))
+            return Response(200, {"ok": True})
+
+        @staticmethod
+        def post(url, **kwargs):
+            calls.append(("POST", url, kwargs))
+            if "bad" in (kwargs.get("data") or ""):
+                return Response(0, None)
+            return Response(503, {"nope": True})
+
+    http = types.ModuleType("pyodide.http")
+    http.pyxhr = Pyxhr
+    monkeypatch.setitem(sys.modules, "pyodide", types.ModuleType("pyodide"))
+    monkeypatch.setitem(sys.modules, "pyodide.http", http)
+    monkeypatch.setattr(httpjson_module.sys, "platform", "emscripten")
+
+    assert REAL_GET_JSON("https://example.test/v1", {"locations": "1,2|3,4"}) == {"ok": True}
+    method, url, kwargs = calls[0]
+    assert method == "GET" and url.endswith("?locations=1,2|3,4")
+    assert "headers" not in kwargs
+
+    with pytest.raises(httpjson_module.HttpError, match="HTTP 503"):
+        REAL_POST_FORM("https://example.test/getSamples", {"f": "json"})
+    assert calls[1][2]["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+    assert "User-Agent" not in calls[1][2]["headers"]
+    with pytest.raises(httpjson_module.HttpError, match="network error"):
+        REAL_POST_FORM("https://example.test/getSamples", {"f": "bad"})
