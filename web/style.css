@@ -53,6 +53,8 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .mode-tabs button { border: none; background: none; padding: 7px 16px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .mode-tabs button + button { border-left: 1px solid var(--line); }
 .mode-tabs button.active { background: var(--accent); color: #fff; }
+.map-views { margin-bottom: 8px; max-width: 100%; flex-wrap: wrap; }
+.map-views button { max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mode-bar .linkish { margin-top: 0; }
 #copy-status { font-size: 0.82rem; color: var(--clear); }
 input.overridden:not([type=checkbox]), select.overridden { border-color: var(--marginal); background: #fff6e5; }

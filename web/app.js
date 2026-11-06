@@ -439,6 +439,7 @@ function ensureMap() {
   }
   L.control.layers(bases, mapGroups, { collapsed: true }).addTo(map);
   L.control.scale({ metric: true, imperial: true }).addTo(map);
+  map.on("dragstart", () => $$(".map-views button").forEach((btn) => btn.classList.remove("active")));
   return map;
 }
 
@@ -485,7 +486,30 @@ function drawMap(r) {
     }
   }
   map.invalidateSize();
-  map.fitBounds(L.latLngBounds(r.map.los).pad(0.15));
+  mapReport = r;
+  $$(".map-views button").forEach((btn) => {
+    const site = { a: r.sites[0], b: r.sites[1] }[btn.dataset.view];
+    if (site) {
+      btn.textContent = site.name;
+      btn.title = `Zoom to ${site.name}`;
+    }
+  });
+  showMapView("path");
+}
+
+const SITE_ZOOM = 17;  // close enough to see buildings and treelines around a site
+let mapReport = null;
+
+function showMapView(view) {
+  if (!map || !mapReport) return;
+  $$(".map-views button").forEach((btn) => btn.classList.toggle("active", btn.dataset.view === view));
+  const site = { a: mapReport.sites[0], b: mapReport.sites[1] }[view];
+  if (site) map.setView([site.lat, site.lon], Math.min(SITE_ZOOM, map.getMaxZoom()));
+  else map.fitBounds(L.latLngBounds(mapReport.map.los).pad(0.15));
+}
+
+function setupMapViews() {
+  $$(".map-views button").forEach((btn) => btn.addEventListener("click", () => showMapView(btn.dataset.view)));
 }
 
 // Consecutive samples that have trees on them.
@@ -764,6 +788,7 @@ function init() {
   updateLookupHint();
   loadSources();
   loadMapConfig();
+  setupMapViews();
   initSites();
 }
 
