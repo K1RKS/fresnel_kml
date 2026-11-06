@@ -71,6 +71,10 @@ For picked nodes that report an antenna azimuth, the result adds an "Antenna aim
 
 The results include a top-down map (Leaflet, bundled in `web/assets/leaflet/`) showing the Fresnel zone outline, the line of sight, both sites and any obstructions. Tiles come from OpenStreetMap by default; the layer menu also offers OpenTopoMap and two satellite views (Esri World Imagery, and public-domain USGS imagery for the US). The `map.tile_servers` section of the server config can add or swap in other tile servers, such as an AREDN mesh tileserver. Tiles can be cached on your server; see [Local cache](#local-cache) and [deploy/INSTALL.md](deploy/INSTALL.md).
 
+### Terrain profile
+
+With the terrain check on, the results show the profile of the whole path and close-ups of the first and last stretch next to each site (500 ft by default; "Close-up profiles" under Advanced). Hover over any of them to measure at that point: the readout under the graph gives the distance from each site, the gap from the ground to the Fresnel zone bottom and to the 60% line, and with Trees or LIDAR, the height of the tree or lidar top above the ground and its gap to the zone bottom and the 60% line (in red when it reaches into them). Click to pin the cursor, drag it to move it, use the arrow keys to step from sample to sample (Shift for ten), and Esc to unpin. The numbers are read from the lines as drawn.
+
 ### Elevation sources
 
 By default the server uses the USGS 3DEP bare-earth image service (lidar-derived where flown, about 3 m resolution, US only), then the public OpenTopoData API (`ned10m`, then `srtm30m`), with Open-Elevation as a last fallback. 3DEP can take 10 to 20 s for a long path; points it can't answer fall through to the next source. `/etc/fresnelkml/config.json` can change the chain: add a self-hosted OpenTopoData server by URL, or a folder of SRTM tiles (`local_hgt`) for offline use. See [deploy/config.example.json](deploy/config.example.json) and `tools/fetch_hgt.py`.

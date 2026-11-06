@@ -135,6 +135,22 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .lg-lidar { display: inline-block; width: 18px; height: 10px; background: rgba(30, 122, 210, 0.25); border-top: 1px solid rgba(30, 122, 210, 0.8); margin-right: 4px; vertical-align: middle; }
 .profile-plot .lidar { fill: rgba(30, 122, 210, 0.25); stroke: rgba(30, 122, 210, 0.8); stroke-width: 1; }
 .profile-plot .tree-obstruction { fill: none; stroke: #b02a37; stroke-width: 2; }
+.profile-plot { cursor: crosshair; touch-action: pan-y; }
+.profile-plot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.profile-plot .cursor-line { stroke: #1d232b; stroke-width: 1; pointer-events: none; }
+.profile-plot .cursor-line.hover { stroke-dasharray: 4 3; opacity: 0.7; }
+.profile-plot .cursor-line.pinned { stroke-width: 1.5; }
+.profile-plot .cursor-dot { stroke: #fff; stroke-width: 1.5; pointer-events: none; }
+.profile-plot .cursor-dot.ground { fill: #8a6d3b; }
+.profile-plot .cursor-dot.trees { fill: #228b22; }
+.profile-plot .cursor-dot.lidar { fill: #1e7ad2; }
+.profile-plot .cursor-dot.zone { fill: #2b8a3e; }
+.profile-plot .cursor-dot.r60 { fill: #e8590c; }
+.profile-plot .cursor-dot.los { fill: #c9a000; }
+.measure-readout { font-size: 0.84rem; color: var(--muted); margin: 4px 0 10px; min-height: 1.3em; line-height: 1.5; }
+.measure-readout strong { color: var(--ink); font-weight: 600; }
+.measure-readout .into { color: var(--blocked); font-weight: 600; }
+.measure-readout .pin-note { font-size: 0.78rem; }
 .trees-row { margin-top: 4px; }
 #map { height: 440px; border: 1px solid var(--line); border-radius: 6px; }
 .leaflet-tooltip.site-tip { font-weight: 600; }

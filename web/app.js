@@ -392,7 +392,8 @@ function drawProfile(r) {
     { d: D, name: b.name, ground: p[p.length - 1].ground_m, top: p[p.length - 1].los_m },
   ];
   const surface = r.surface && r.surface.enabled ? r.surface : null;
-  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface });
+  const trees = Boolean(r.trees && r.trees.enabled);
+  drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface, trees });
   const feet = r.end_window_m / FEET;
   const win = resultUnits === "ft" ? (feet < 5280 ? `${feet.toFixed(0)} ft` : dfmt(r.end_window_m, 2))
     : (r.end_window_m < 1000 ? `${r.end_window_m.toFixed(0)} m` : dfmt(r.end_window_m, 2));
@@ -401,10 +402,11 @@ function drawProfile(r) {
   for (const [pts, from, svgSel, titleSel, title] of zoom) {
     const show = pts && pts.length > 1;
     $(svgSel).hidden = $(titleSel).hidden = !show;
+    if (readoutFor($(svgSel))) readoutFor($(svgSel)).hidden = !show;
     if (!show) continue;
     $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
     const closeUp = surface && { ...surface, plot: (from === "a" ? surface.plot_a : surface.plot_b) || surface.plot };
-    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface: closeUp });
+    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface: closeUp, trees });
   }
 }
 
@@ -622,7 +624,214 @@ function drawPlot(svg, p, opts) {
       parts.push(`<text class="offsite" x="${left ? L + 4 : W - R - 4}" y="${T - 10}" text-anchor="${left ? "start" : "end"}">${text}</text>`);
     }
   }
+  parts.push(`<g class="measure-cursor"></g>`);
   svg.innerHTML = parts.join("");
+  // what the measuring cursor needs: the same scales and data the picture was drawn from
+  svg._plot = {
+    x, y, d0, d1, L, R, W, T, B, H, p, sp, D, from: opts.from, masts: opts.masts,
+    mode: opts.surface ? "lidar" : opts.trees ? "trees" : "none",
+    dAt: (px) => d0 + ((px - L) / (W - L - R)) * span,
+  };
+  resetMeasure(svg);
+}
+
+// ----- Measuring cursor on the profile graphs -----
+
+const MEASURE_HINT = "Hover over the profile to measure at any point; click to pin, drag to move, arrow keys to nudge, Esc to unpin.";
+
+function hasValue(v) {
+  return v !== null && v !== undefined;
+}
+
+// The two points either side of d (the same point twice on an exact hit), or null outside them.
+function bracket(points, d) {
+  const n = points.length;
+  if (!n || d < points[0].d_m - 1e-6 || d > points[n - 1].d_m + 1e-6) return null;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].d_m <= d) lo = mid;
+    else hi = mid;
+  }
+  if (Math.abs(points[lo].d_m - d) < 1e-6) return [points[lo], points[lo]];
+  if (Math.abs(points[hi].d_m - d) < 1e-6) return [points[hi], points[hi]];
+  return [points[lo], points[hi]];
+}
+
+// Linear interpolation of key at d, as the graph draws it; null where either side has no value.
+function interp(points, d, key) {
+  const pair = bracket(points, d);
+  if (!pair) return null;
+  const [a, b] = pair;
+  if (!hasValue(a[key]) || !hasValue(b[key])) return null;
+  if (a === b || b.d_m === a.d_m) return a[key];
+  return a[key] + ((d - a.d_m) / (b.d_m - a.d_m)) * (b[key] - a[key]);
+}
+
+// The lidar (or fallback tree) top at d, only within one drawn run, like the blue/green fill.
+function surfaceTopAt(sp, d) {
+  const pair = bracket(sp, d);
+  if (!pair) return null;
+  const [a, b] = pair;
+  if (a.lidar !== b.lidar) return null;
+  const top = a === b || b.d_m === a.d_m ? a.peak_m : a.peak_m + ((d - a.d_m) / (b.d_m - a.d_m)) * (b.peak_m - a.peak_m);
+  return { top, station: d - a.d_m <= b.d_m - d ? a : b };
+}
+
+function measureAt(plot, d) {
+  const p = plot.p;
+  const m = {
+    d, ground: interp(p, d, "effective_m"), los: interp(p, d, "los_m"), zone: interp(p, d, "zone_bottom_m"),
+    sixty: interp(p, d, "r60_bottom_m"), top: null, topKind: null, dataset: null,
+  };
+  if (plot.mode === "trees") {
+    m.top = interp(p, d, "tree_top_m");
+    if (hasValue(m.top)) m.topKind = "tree";
+  } else if (plot.mode === "lidar") {
+    const s = surfaceTopAt(plot.sp, d);
+    if (s) {
+      m.top = s.top;
+      m.topKind = s.station.lidar ? "lidar" : "fallback";
+      m.dataset = s.station.dataset || null;
+    }
+  }
+  return m;
+}
+
+function cursorLine(plot, d, cls) {
+  const cx = plot.x(d).toFixed(1);
+  return `<line class="cursor-line ${cls}" x1="${cx}" x2="${cx}" y1="${plot.T}" y2="${plot.H - plot.B}"/>`;
+}
+
+function cursorDots(plot, m) {
+  const cx = plot.x(m.d).toFixed(1);
+  const dot = (v, cls) => (hasValue(v) ? `<circle class="cursor-dot ${cls}" cx="${cx}" cy="${plot.y(v).toFixed(1)}" r="4"/>` : "");
+  const topCls = m.topKind === "lidar" ? "lidar" : "trees";
+  return dot(m.ground, "ground") + dot(m.top, topCls) + dot(m.zone, "zone") + dot(m.sixty, "r60") + dot(m.los, "los");
+}
+
+// A gap between two heights: positive is clear, negative is how far the lower thing reaches past the line.
+function gapHtml(v, past) {
+  if (!hasValue(v)) return "n/a";
+  return v >= 0 ? hfmt(v) : `<span class="into">${hfmt(-v)} ${past}</span>`;
+}
+
+function readoutHtml(plot, m, pinned) {
+  const [a, b] = plot.masts;
+  const from = `${dfmt(m.d, 2)} from ${esc(a.name)}`;
+  const to = `${dfmt(Math.max(0, plot.D - m.d), 2)} to ${esc(b.name)}`;
+  const lines = [`<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`
+    + (pinned ? ' <span class="pin-note">pinned: drag to move, Esc to unpin</span>' : "")];
+  if (hasValue(m.ground)) {
+    lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
+      + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
+  }
+  if (hasValue(m.top) && hasValue(m.ground)) {
+    const name = { lidar: "lidar top", fallback: "tree top (no lidar here)", tree: "tree top" }[m.topKind];
+    const ds = m.dataset ? ` (${esc(datasetLabel(m.dataset))})` : "";
+    const cap = name.charAt(0).toUpperCase() + name.slice(1);
+    lines.push(`Ground to ${name}: ${hfmt(m.top - m.ground)}${ds}`);
+    lines.push(`${cap} to Fresnel zone bottom: ${gapHtml(m.zone - m.top, "into the zone")}${m.zone >= m.top ? " clear" : ""}`
+      + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.top, "past the 60% line")}${m.sixty >= m.top ? " clear" : ""}`);
+  } else if (plot.mode !== "none") {
+    lines.push("No trees or lidar checked here.");
+  }
+  return lines.join("<br>");
+}
+
+function readoutFor(svg) {
+  const el = svg.nextElementSibling;
+  return el && el.classList.contains("measure-readout") ? el : null;
+}
+
+function renderMeasure(svg) {
+  const st = svg._measure, plot = svg._plot;
+  const g = svg.querySelector(".measure-cursor");
+  if (!st || !plot || !g) return;
+  const hovering = hasValue(st.hover) && !st.dragging;
+  const active = hovering ? st.hover : st.pinned;
+  let html = hasValue(st.pinned) ? cursorLine(plot, st.pinned, "pinned") : "";
+  if (hovering) html += cursorLine(plot, st.hover, "hover");
+  const readout = readoutFor(svg);
+  if (hasValue(active)) {
+    const m = measureAt(plot, active);
+    g.innerHTML = html + cursorDots(plot, m);
+    if (readout) readout.innerHTML = readoutHtml(plot, m, !hovering);
+  } else {
+    g.innerHTML = html;
+    if (readout) readout.textContent = MEASURE_HINT;
+  }
+}
+
+function resetMeasure(svg) {
+  svg._measure = { hover: null, pinned: null, dragging: false };
+  renderMeasure(svg);
+}
+
+function measureDistance(svg, ev) {
+  const plot = svg._plot;
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  const px = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+  return plot.dAt(Math.min(plot.W - plot.R, Math.max(plot.L, px)));
+}
+
+// The next drawn sample (profile or lidar) from d, `steps` along in direction dir.
+function stepDistance(plot, d, dir, steps) {
+  const ds = [...new Set(plot.p.map((q) => q.d_m).concat(plot.sp.map((q) => q.d_m)))]
+    .filter((v) => v >= plot.d0 - 1e-6 && v <= plot.d1 + 1e-6).sort((x, y) => x - y);
+  if (!ds.length) return d;
+  let i = dir > 0 ? ds.findIndex((v) => v > d + 1e-6) : ds.length - 1 - [...ds].reverse().findIndex((v) => v < d - 1e-6);
+  if (i < 0 || i >= ds.length) i = dir > 0 ? ds.length - 1 : 0;
+  return ds[Math.max(0, Math.min(ds.length - 1, i + dir * (steps - 1)))];
+}
+
+function setupMeasure(svg) {
+  const ready = () => svg._plot && svg._measure;
+  svg.addEventListener("pointermove", (ev) => {
+    if (!ready()) return;
+    const d = measureDistance(svg, ev);
+    if (svg._measure.dragging) svg._measure.pinned = d;
+    else svg._measure.hover = d;
+    renderMeasure(svg);
+  });
+  svg.addEventListener("pointerleave", () => {
+    if (!ready() || svg._measure.dragging) return;
+    svg._measure.hover = null;
+    renderMeasure(svg);
+  });
+  svg.addEventListener("pointerdown", (ev) => {
+    if (!ready() || ev.button !== 0) return;
+    Object.assign(svg._measure, { pinned: measureDistance(svg, ev), dragging: true, hover: null });
+    svg.setPointerCapture(ev.pointerId);
+    svg.focus({ preventScroll: true });
+    renderMeasure(svg);
+  });
+  const stopDrag = (ev) => {
+    if (!ready() || !svg._measure.dragging) return;
+    svg._measure.dragging = false;
+    if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId);
+    renderMeasure(svg);
+  };
+  svg.addEventListener("pointerup", stopDrag);
+  svg.addEventListener("pointercancel", stopDrag);
+  svg.addEventListener("keydown", (ev) => {
+    if (!ready()) return;
+    const st = svg._measure, plot = svg._plot;
+    if (ev.key === "Escape" && hasValue(st.pinned)) {
+      st.pinned = null;
+    } else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+      const dir = ev.key === "ArrowRight" ? 1 : -1;
+      const start = hasValue(st.pinned) ? st.pinned : hasValue(st.hover) ? st.hover : (plot.d0 + plot.d1) / 2;
+      st.pinned = stepDistance(plot, start, dir, ev.shiftKey ? 10 : 1);
+      st.hover = null;
+    } else {
+      return;
+    }
+    ev.preventDefault();
+    renderMeasure(svg);
+  });
 }
 
 async function submit(ev) {
@@ -791,6 +1000,7 @@ function init() {
   loadSources();
   loadMapConfig();
   setupMapViews();
+  ["#profile-main", "#profile-a", "#profile-b"].forEach((sel) => setupMeasure($(sel)));
   initSites();
 }
 
