@@ -13,7 +13,7 @@ from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
 from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_text, flown_years, grid_spacing, lateral_clearance,
-                      obstruction_markers, thin_for_plot)
+                      obstruction_markers, thin_for_plot, window_points)
 from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
@@ -187,6 +187,7 @@ class LinkReport:
 
     def surface_dict(self) -> dict:
         w = self.surface_worst
+        win = self.end_window_m or 0.0  # the close-up profiles get every station in their window
         return {
             "enabled": self.surface_checked,
             "sources": self.surface_sources,
@@ -205,6 +206,9 @@ class LinkReport:
             "worst": None if w is None else _surface_point_dict(w),
             "status": self.surface_status,
             "plot": [_surface_point_dict(p) for p in thin_for_plot(self.surface_points, self.distance_m)],
+            "plot_a": [_surface_point_dict(p) for p in window_points(self.surface_points, 0.0, win)],
+            "plot_b": [_surface_point_dict(p) for p in
+                       window_points(self.surface_points, self.distance_m - win, self.distance_m)],
             "markers": [_surface_point_dict(p) for p in self.surface_obstructions],
         }
 

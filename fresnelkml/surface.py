@@ -12,7 +12,8 @@ from .cache import slug
 
 # Sample lines across the zone, as fractions of the lidar width (which is itself a fraction of r1).
 LATERAL_FRACTIONS = (0.0, -0.5, 0.5, -1.0, 1.0)
-MAX_PLOT_POINTS = 600
+MAX_PLOT_POINTS = 600  # whole-path profile
+MAX_CLOSEUP_POINTS = 1500  # each close-up profile: every station unless the window is very long
 MAX_MARKERS = 100
 
 
@@ -178,16 +179,25 @@ class SurfaceSampler:
         return out
 
 
-def thin_for_plot(points: list[SurfacePoint], distance_m: float, bins: int = MAX_PLOT_POINTS) -> list[SurfacePoint]:
-    """At most `bins` stations: the highest in each stretch of path, so peaks survive."""
+def thin_for_plot(points: list[SurfacePoint], distance_m: float, bins: int = MAX_PLOT_POINTS,
+                  start_m: float = 0.0) -> list[SurfacePoint]:
+    """At most `bins` stations over `distance_m` of path from `start_m`: the highest in each stretch,
+    so peaks survive."""
     if len(points) <= bins:
         return list(points)
     best: dict[int, SurfacePoint] = {}
     for p in points:
-        b = min(bins - 1, int(p.d_m / distance_m * bins))
+        b = max(0, min(bins - 1, int((p.d_m - start_m) / distance_m * bins)))
         if b not in best or p.peak_m > best[b].peak_m:
             best[b] = p
     return [best[b] for b in sorted(best)]
+
+
+def window_points(points: list[SurfacePoint], d0: float, d1: float,
+                  bins: int = MAX_CLOSEUP_POINTS) -> list[SurfacePoint]:
+    """Every station from d0 to d1 (for the close-up profiles), thinned only past `bins`."""
+    inside = [p for p in points if d0 - 1e-6 <= p.d_m <= d1 + 1e-6]
+    return thin_for_plot(inside, max(d1 - d0, 1e-6), bins, d0)
 
 
 def obstruction_markers(points: list[SurfacePoint], ratio: float, limit: int = MAX_MARKERS) -> list[SurfacePoint]:

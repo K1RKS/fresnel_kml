@@ -445,3 +445,25 @@ def test_flown_text():
     assert flown_text([{"year": 2017}, {"year": 2017}]) == "Lidar was flown in 2017"
     assert flown_text([{"year": 2018}, {"year": 2007}, {"year": None}]) == "Lidar was flown between 2007 and 2018"
     assert flown_text([{"year": None}]) == "" and flown_text([]) == ""
+
+
+def test_close_ups_get_every_lidar_station(fake_chain):
+    r = lidar(fake_chain, None, sampler=FakeSampler(lambda lat, lon: 5.0, spacing_m=3.0))
+    d = r.to_dict()["surface"]
+    assert len(d["plot"]) <= 600 < len(r.surface_points)  # the whole path is thinned
+    win = r.end_window_m
+    in_a = [p for p in r.surface_points if p.d_m <= win]
+    in_b = [p for p in r.surface_points if p.d_m >= r.distance_m - win]
+    assert len(d["plot_a"]) == len(in_a) > 40 and len(d["plot_b"]) == len(in_b) > 40
+    assert all(p["d_m"] <= win + 0.01 for p in d["plot_a"])
+    assert all(p["d_m"] >= r.distance_m - win - 0.01 for p in d["plot_b"])
+    gaps = [b["d_m"] - a["d_m"] for a, b in zip(d["plot_a"], d["plot_a"][1:])]
+    assert max(gaps) == pytest.approx(3.0, abs=0.01)
+
+
+def test_window_points_thins_only_past_its_cap():
+    from fresnelkml.surface import SurfacePoint, window_points
+    pts = [SurfacePoint(float(i), 0, 0, 0, 1, 0, 0, float(i % 7), 10, 5, 1.0, True) for i in range(5000)]
+    assert len(window_points(pts, 100, 400)) == 301
+    thinned = window_points(pts, 0, 4999, bins=500)
+    assert len(thinned) == 500 and all(0 <= p.d_m <= 4999 for p in thinned)

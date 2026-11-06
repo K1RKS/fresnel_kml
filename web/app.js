@@ -402,7 +402,8 @@ function drawProfile(r) {
     $(svgSel).hidden = $(titleSel).hidden = !show;
     if (!show) continue;
     $(titleSel).textContent = `${title} (distance ${from === "a" ? "from " + a.name : "to " + b.name})`;
-    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface });
+    const closeUp = surface && { ...surface, plot: (from === "a" ? surface.plot_a : surface.plot_b) || surface.plot };
+    drawPlot($(svgSel), pts, { d0: pts[0].d_m, d1: pts[pts.length - 1].d_m, masts, from, surface: closeUp });
   }
 }
 
