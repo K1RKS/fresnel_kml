@@ -637,7 +637,10 @@ function drawPlot(svg, p, opts) {
 
 // ----- Measuring cursor on the profile graphs -----
 
-const MEASURE_HINT = "Hover over the profile to measure at any point; click to pin, drag to move, arrow keys to nudge, Esc to unpin.";
+const MEASURE_HINT = "Hover over the profile to measure at any point. Click to add a marker (drag to move it, \u00d7 to remove it); "
+  + "the arrow keys move the selected marker and Esc removes it.";
+const PIN_COLORS = ["#d6336c", "#1971c2", "#2f9e44", "#f08c00", "#7048e8", "#0c8599", "#e8590c", "#5c940d"];
+let nextPin = 0;  // markers take the next colour in turn, across all the graphs
 
 function hasValue(v) {
   return v !== null && v !== undefined;
@@ -698,9 +701,16 @@ function measureAt(plot, d) {
   return m;
 }
 
-function cursorLine(plot, d, cls) {
+function cursorLine(plot, d, cls, color) {
   const cx = plot.x(d).toFixed(1);
-  return `<line class="cursor-line ${cls}" x1="${cx}" x2="${cx}" y1="${plot.T}" y2="${plot.H - plot.B}"/>`;
+  const style = color ? ` style="stroke:${color}"` : "";
+  return `<line class="cursor-line ${cls}"${style} x1="${cx}" x2="${cx}" y1="${plot.T}" y2="${plot.H - plot.B}"/>`;
+}
+
+function pinRemoveIcon(plot, pin) {
+  const cx = plot.x(pin.d).toFixed(1);
+  return `<g class="pin-x" data-pin="${pin.id}" transform="translate(${cx},${plot.T - 9})"><title>Remove this marker</title>`
+    + `<circle r="7" style="fill:${pin.color}"/><path d="M-3,-3L3,3M3,-3L-3,3"/></g>`;
 }
 
 function cursorDots(plot, m) {
@@ -716,12 +726,19 @@ function gapHtml(v, past) {
   return v >= 0 ? hfmt(v) : `<span class="into">${hfmt(-v)} ${past}</span>`;
 }
 
-function readoutHtml(plot, m, pinned) {
+function whereText(plot, d) {
+  const [a, b] = plot.masts;
+  return plot.from === "b" ? `${dfmt(Math.max(0, plot.D - d), 2)} to ${b.name}` : `${dfmt(d, 2)} from ${a.name}`;
+}
+
+// One measurement in the readout: the live hover reading (pin null) or a saved marker.
+function readoutEntry(plot, m, pin) {
   const [a, b] = plot.masts;
   const from = `${dfmt(m.d, 2)} from ${esc(a.name)}`;
   const to = `${dfmt(Math.max(0, plot.D - m.d), 2)} to ${esc(b.name)}`;
-  const lines = [`<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`
-    + (pinned ? ' <span class="pin-note">pinned: drag to move, Esc to unpin</span>' : "")];
+  const swatch = pin ? `<span class="pin-swatch" style="background:${pin.color}"></span>` : '<span class="pin-swatch hover"></span>';
+  const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
+  const lines = [`${remove}${swatch}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
   if (hasValue(m.ground)) {
     lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
       + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
@@ -736,7 +753,8 @@ function readoutHtml(plot, m, pinned) {
   } else if (plot.mode !== "none") {
     lines.push("No trees or lidar checked here.");
   }
-  return lines.join("<br>");
+  const style = pin ? ` style="border-left-color:${pin.color}"` : "";
+  return `<div class="measure-entry${pin ? "" : " hover"}"${style}>${lines.join("<br>")}</div>`;
 }
 
 function readoutFor(svg) {
@@ -748,70 +766,117 @@ function renderMeasure(svg) {
   const st = svg._measure, plot = svg._plot;
   const g = svg.querySelector(".measure-cursor");
   if (!st || !plot || !g) return;
-  const hovering = hasValue(st.hover) && !st.dragging;
-  const active = hovering ? st.hover : st.pinned;
-  let html = hasValue(st.pinned) ? cursorLine(plot, st.pinned, "pinned") : "";
-  if (hovering) html += cursorLine(plot, st.hover, "hover");
-  const readout = readoutFor(svg);
-  if (hasValue(active)) {
-    const m = measureAt(plot, active);
-    g.innerHTML = html + cursorDots(plot, m);
-    if (readout) readout.innerHTML = readoutHtml(plot, m, !hovering);
-    mapCursorSource = svg;
-  } else {
-    g.innerHTML = html;
-    if (readout) readout.textContent = MEASURE_HINT;
-    if (mapCursorSource === svg) {
-      mapCursorSource = MEASURED_PLOTS.map((sel) => $(sel)).find((s) => s._measure && hasValue(s._measure.pinned)) || null;
-    }
+  const hovering = hasValue(st.hover) && st.dragging === null;
+  const pins = [...st.pins].sort((p, q) => p.d - q.d);
+  let html = "";
+  for (const pin of pins) {
+    html += cursorLine(plot, pin.d, `pinned${pin.id === st.selected ? " selected" : ""}`, pin.color)
+      + cursorDots(plot, measureAt(plot, pin.d)) + pinRemoveIcon(plot, pin);
   }
-  syncMapCursor();
+  if (hovering) html += cursorLine(plot, st.hover, "hover") + cursorDots(plot, measureAt(plot, st.hover));
+  g.innerHTML = html;
+  const readout = readoutFor(svg);
+  if (readout) {
+    const entries = (hovering ? [readoutEntry(plot, measureAt(plot, st.hover), null)] : [])
+      .concat(pins.map((pin) => readoutEntry(plot, measureAt(plot, pin.d), pin)));
+    if (entries.length) readout.innerHTML = entries.join("");
+    else readout.textContent = MEASURE_HINT;
+  }
+  if (hovering) hoverSource = svg;
+  else if (hoverSource === svg) hoverSource = null;
+  syncMapMarkers();
 }
 
-// ----- The measuring cursor's place on the map -----
+// ----- The measuring markers on the map -----
 
 const MEASURED_PLOTS = ["#profile-main", "#profile-a", "#profile-b"];
-let mapCursorSource = null;  // the profile graph whose cursor the map marker follows
-let mapCursor = null;
+let hoverSource = null;  // the profile graph being hovered, whose cursor the faded map marker follows
+let mapHover = null;
+const mapPins = new Map();  // marker id -> its map marker
 
-function syncMapCursor() {
+function latLonAt(plot, d) {
+  const lat = interp(plot.p, d, "lat"), lon = interp(plot.p, d, "lon");
+  return hasValue(lat) && hasValue(lon) ? [lat, lon] : null;
+}
+
+function syncMapMarkers() {
   if (!map) return;
-  const svg = mapCursorSource;
-  const st = svg && svg._measure, plot = svg && svg._plot;
-  const hovering = st && hasValue(st.hover) && !st.dragging;
-  const d = st ? (hovering ? st.hover : st.pinned) : null;
-  const lat = hasValue(d) ? interp(plot.p, d, "lat") : null;
-  const lon = hasValue(d) ? interp(plot.p, d, "lon") : null;
-  if (!hasValue(lat) || !hasValue(lon)) {
-    if (mapCursor) mapCursor.remove();
-    mapCursor = null;
-    return;
+  const hs = hoverSource && hoverSource._measure;
+  const hoverAt = hs && hasValue(hs.hover) ? latLonAt(hoverSource._plot, hs.hover) : null;
+  if (!hoverAt) {
+    if (mapHover) mapHover.remove();
+    mapHover = null;
+  } else {
+    if (!mapHover) {
+      mapHover = L.circleMarker(hoverAt, { radius: 7, color: "#1d232b", weight: 2, fillColor: "#ffd43b", fillOpacity: 0.6,
+        dashArray: "3 3", interactive: false, pane: "markerPane" }).addTo(map);
+      mapHover.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+    }
+    mapHover.setLatLng(hoverAt);
+    mapHover.setTooltipContent(esc(whereText(hoverSource._plot, hs.hover)));
+    if (!mapHover.isTooltipOpen()) mapHover.openTooltip();
   }
-  if (!mapCursor) {
-    mapCursor = L.circleMarker([lat, lon], { radius: 7, color: "#1d232b", weight: 2, fillColor: "#ffd43b",
-      interactive: false, pane: "markerPane" }).addTo(map);
-    mapCursor.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+  const live = new Set();
+  for (const sel of MEASURED_PLOTS) {
+    const svg = $(sel), st = svg._measure, plot = svg._plot;
+    if (!st || !plot || svg.hidden) continue;
+    for (const pin of st.pins) {
+      const at = latLonAt(plot, pin.d);
+      if (!at) continue;
+      live.add(pin.id);
+      let mk = mapPins.get(pin.id);
+      if (!mk) {
+        mk = L.circleMarker(at, { radius: 7, color: "#fff", weight: 2, fillColor: pin.color, fillOpacity: 1,
+          pane: "markerPane" }).addTo(map);
+        mk.bindTooltip("", { direction: "right", offset: [8, 0], className: "cursor-tip" });
+        mapPins.set(pin.id, mk);
+      }
+      mk.setLatLng(at);
+      mk.setTooltipContent(esc(whereText(plot, pin.d)));
+    }
   }
-  mapCursor.setLatLng([lat, lon]);
-  mapCursor.setStyle({ fillOpacity: hovering ? 0.6 : 1, dashArray: hovering ? "3 3" : null });
-  const [a, b] = plot.masts;
-  const where = plot.from === "b" ? `${dfmt(Math.max(0, plot.D - d), 2)} to ${b.name}` : `${dfmt(d, 2)} from ${a.name}`;
-  mapCursor.setTooltipContent(esc(where));
-  if (!mapCursor.isTooltipOpen()) mapCursor.openTooltip();
+  for (const [id, mk] of mapPins) {
+    if (!live.has(id)) {
+      mk.remove();
+      mapPins.delete(id);
+    }
+  }
 }
 
 function resetMeasure(svg) {
-  svg._measure = { hover: null, pinned: null, dragging: false };
+  svg._measure = { hover: null, pins: [], selected: null, dragging: null };
   renderMeasure(svg);
+}
+
+function removePin(svg, id) {
+  const st = svg._measure;
+  st.pins = st.pins.filter((pin) => pin.id !== id);
+  if (st.selected === id) st.selected = st.pins.length ? st.pins[st.pins.length - 1].id : null;
+  if (st.dragging === id) st.dragging = null;
+  renderMeasure(svg);
+}
+
+function svgX(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+}
+
+// The marker within a few pixels of the pointer, to drag it instead of adding another.
+function pinNear(svg, ev) {
+  const plot = svg._plot, px = svgX(svg, ev);
+  let best = null;
+  for (const pin of svg._measure.pins) {
+    const dx = Math.abs(plot.x(pin.d) - px);
+    if (dx <= 6 && (!best || dx < best.dx)) best = { pin, dx };
+  }
+  return best ? best.pin : null;
 }
 
 function measureDistance(svg, ev) {
   const plot = svg._plot;
-  const pt = svg.createSVGPoint();
-  pt.x = ev.clientX;
-  pt.y = ev.clientY;
-  const px = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
-  return plot.dAt(Math.min(plot.W - plot.R, Math.max(plot.L, px)));
+  return plot.dAt(Math.min(plot.W - plot.R, Math.max(plot.L, svgX(svg, ev))));
 }
 
 // The next drawn sample (profile or lidar) from d, `steps` along in direction dir.
@@ -824,30 +889,46 @@ function stepDistance(plot, d, dir, steps) {
   return ds[Math.max(0, Math.min(ds.length - 1, i + dir * (steps - 1)))];
 }
 
+function addPin(svg, d) {
+  const pin = { id: nextPin, d, color: PIN_COLORS[nextPin % PIN_COLORS.length] };
+  nextPin += 1;
+  svg._measure.pins.push(pin);
+  return pin;
+}
+
 function setupMeasure(svg) {
   const ready = () => svg._plot && svg._measure;
+  const pinById = (id) => svg._measure.pins.find((pin) => pin.id === id);
   svg.addEventListener("pointermove", (ev) => {
     if (!ready()) return;
-    const d = measureDistance(svg, ev);
-    if (svg._measure.dragging) svg._measure.pinned = d;
-    else svg._measure.hover = d;
+    const st = svg._measure, d = measureDistance(svg, ev);
+    if (st.dragging !== null && pinById(st.dragging)) pinById(st.dragging).d = d;
+    else st.hover = d;
     renderMeasure(svg);
   });
   svg.addEventListener("pointerleave", () => {
-    if (!ready() || svg._measure.dragging) return;
+    if (!ready() || svg._measure.dragging !== null) return;
     svg._measure.hover = null;
     renderMeasure(svg);
   });
   svg.addEventListener("pointerdown", (ev) => {
     if (!ready() || ev.button !== 0) return;
-    Object.assign(svg._measure, { pinned: measureDistance(svg, ev), dragging: true, hover: null });
+    const remove = ev.target.closest && ev.target.closest(".pin-x");
+    if (remove) {
+      ev.preventDefault();
+      removePin(svg, Number(remove.dataset.pin));
+      return;
+    }
+    const st = svg._measure;
+    const pin = pinNear(svg, ev) || addPin(svg, measureDistance(svg, ev));
+    Object.assign(st, { selected: pin.id, dragging: pin.id, hover: null });
     svg.setPointerCapture(ev.pointerId);
     svg.focus({ preventScroll: true });
     renderMeasure(svg);
   });
   const stopDrag = (ev) => {
-    if (!ready() || !svg._measure.dragging) return;
-    svg._measure.dragging = false;
+    if (!ready() || svg._measure.dragging === null) return;
+    svg._measure.dragging = null;
     if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId);
     renderMeasure(svg);
   };
@@ -856,19 +937,27 @@ function setupMeasure(svg) {
   svg.addEventListener("keydown", (ev) => {
     if (!ready()) return;
     const st = svg._measure, plot = svg._plot;
-    if (ev.key === "Escape" && hasValue(st.pinned)) {
-      st.pinned = null;
+    const selected = pinById(st.selected);
+    if ((ev.key === "Escape" || ev.key === "Delete" || ev.key === "Backspace") && selected) {
+      removePin(svg, selected.id);
     } else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
       const dir = ev.key === "ArrowRight" ? 1 : -1;
-      const start = hasValue(st.pinned) ? st.pinned : hasValue(st.hover) ? st.hover : (plot.d0 + plot.d1) / 2;
-      st.pinned = stepDistance(plot, start, dir, ev.shiftKey ? 10 : 1);
-      st.hover = null;
+      const pin = selected || addPin(svg, hasValue(st.hover) ? st.hover : (plot.d0 + plot.d1) / 2);
+      pin.d = stepDistance(plot, pin.d, dir, ev.shiftKey ? 10 : 1);
+      Object.assign(st, { selected: pin.id, hover: null });
+      renderMeasure(svg);
     } else {
       return;
     }
     ev.preventDefault();
-    renderMeasure(svg);
   });
+  const readout = readoutFor(svg);
+  if (readout) {
+    readout.addEventListener("click", (ev) => {
+      const button = ev.target.closest(".pin-remove");
+      if (button && ready()) removePin(svg, Number(button.dataset.pin));
+    });
+  }
 }
 
 async function submit(ev) {
