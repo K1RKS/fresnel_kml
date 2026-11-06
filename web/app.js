@@ -341,8 +341,8 @@ function showResult(data, units, picks = [], feedHeights = []) {
       }
       const sources = sf.sources.length ? sf.sources.join(", ") : "no lidar";
       const span = sf.flown;
-      const flown = !span ? "" : `<br><small>${span.oldest === span.newest ? `Lidar flown in ${span.oldest}`
-        : `Lidar flown between ${span.oldest} and ${span.newest}`}</small>`;
+      const flown = !span ? "" : `<br><small>${span.oldest === span.newest ? `Lidar was flown in ${span.oldest}`
+        : `Lidar was flown between ${span.oldest} and ${span.newest}`}</small>`;
       rows.push(["Min clearance over lidar surface",
         `<span class="badge ${sf.status}">${sf.status}</span> ${detail}${flown}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
         + `every ${dfmt(sf.spacing_m)} across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `

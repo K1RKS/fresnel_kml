@@ -63,11 +63,12 @@ def flown_years(datasets: list[dict]) -> tuple[int, int] | None:
 
 
 def flown_text(datasets: list[dict]) -> str:
-    """Lidar flown in 2017, or Lidar flown between 2007 and 2018 when the datasets differ."""
+    """Lidar was flown in 2017, or Lidar was flown between 2007 and 2018 when the datasets differ."""
     span = flown_years(datasets)
     if span is None:
         return ""
-    return f"Lidar flown in {span[0]}" if span[0] == span[1] else f"Lidar flown between {span[0]} and {span[1]}"
+    return (f"Lidar was flown in {span[0]}" if span[0] == span[1]
+            else f"Lidar was flown between {span[0]} and {span[1]}")
 
 
 def lateral_clearance(dz: float, offset_m: float, r1_m: float) -> float:

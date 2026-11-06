@@ -12,7 +12,7 @@ from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
-from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_years, grid_spacing, lateral_clearance,
+from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_text, flown_years, grid_spacing, lateral_clearance,
                       obstruction_markers, thin_for_plot)
 from .units import fmt_distance, fmt_height
 
@@ -502,6 +502,8 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
         warnings.append(f"Lidar source error: {got.errors[0][:160]}")
     if spacing > sampler.cfg.spacing_m + 1e-9:
         warnings.append(f"Long path: lidar was sampled every {fmt_distance(spacing, u, 1)}.")
+    if flown_text(report.surface_datasets):
+        warnings.append(f"{flown_text(report.surface_datasets)}.")
     w = report.surface_worst
     year = w.dataset.get("year") if w is not None and w.lidar and w.dataset else None
     if isinstance(year, int) and time.gmtime().tm_year - year > OLD_LIDAR_YEARS:

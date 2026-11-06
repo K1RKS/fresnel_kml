@@ -431,8 +431,10 @@ def test_report_names_the_lidar_datasets(fake_chain):
     assert d["datasets"][0]["name"].startswith("Survey") and d["worst"]["dataset"]["year"] == 2009
     assert d["flown"] == {"oldest": 2009, "newest": 2019}
     assert all(m["dataset"]["year"] == 2009 for m in d["markers"])
-    assert "Lidar flown between 2009 and 2019" in render_kml(r)
-    assert "Lidar flown between 2009 and 2019" in summary(r)
+    assert "Lidar was flown between 2009 and 2019" in render_kml(r)
+    assert "Lidar was flown between 2009 and 2019" in summary(r)
+    flown = r.warnings.index("Lidar was flown between 2009 and 2019.")
+    assert "flown in 2009; trees may be taller now" in r.warnings[flown + 1]
     recent = lidar(fake_chain, None, sampler=DatasetSampler(lambda lat, lon: 45.0 if lon > TEN_KM_LON / 2 else 0.0))
     assert recent.surface_worst.dataset["year"] == 2019
     assert not any("trees may be taller" in w for w in recent.warnings)
@@ -440,6 +442,6 @@ def test_report_names_the_lidar_datasets(fake_chain):
 
 def test_flown_text():
     from fresnelkml.surface import flown_text
-    assert flown_text([{"year": 2017}, {"year": 2017}]) == "Lidar flown in 2017"
-    assert flown_text([{"year": 2018}, {"year": 2007}, {"year": None}]) == "Lidar flown between 2007 and 2018"
+    assert flown_text([{"year": 2017}, {"year": 2017}]) == "Lidar was flown in 2017"
+    assert flown_text([{"year": 2018}, {"year": 2007}, {"year": None}]) == "Lidar was flown between 2007 and 2018"
     assert flown_text([{"year": None}]) == "" and flown_text([]) == ""
