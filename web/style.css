@@ -76,6 +76,8 @@ input.overridden:not([type=checkbox]), select.overridden { border-color: var(--m
   background: none; border: none; color: var(--accent); padding: 0; margin-top: 6px;
   cursor: pointer; font-size: 0.82rem; text-align: left;
 }
+a.linkish { display: inline-block; text-decoration: none; }
+a.linkish:hover, a.linkish:focus-visible { text-decoration: underline; }
 .color-pick { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-top: 8px; }
 .color-pick input[type=color] { width: 44px; height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0; }
 .color-pick input[type=color]:disabled { opacity: 0.35; }
