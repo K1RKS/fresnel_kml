@@ -467,3 +467,40 @@ def test_window_points_thins_only_past_its_cap():
     assert len(window_points(pts, 100, 400)) == 301
     thinned = window_points(pts, 0, 4999, bins=500)
     assert len(thinned) == 500 and all(0 <= p.d_m <= 4999 for p in thinned)
+
+
+def test_lidar_stations_fill_the_close_ups_first():
+    from fresnelkml.surface import lidar_stations
+    # 45 km path, 150 m close-ups, 3 m spacing, 5 lines, 25,000 points
+    dists, mid, near = lidar_stations(15.0, 44_985.0, 45_000.0, 150.0, 3.0, 5, 25_000)
+    assert near == 3.0 and mid > 3.0
+    assert len(dists) <= 25_000 // 5 + 4
+    a = [d for d in dists if d <= 150]
+    assert a[0] == 15.0 and max(b - x for x, b in zip(a, a[1:])) == pytest.approx(3.0)
+    b = [d for d in dists if d >= 44_850]
+    assert b[-1] == 44_985.0 and max(y - x for x, y in zip(b, b[1:])) == pytest.approx(3.0)
+    middle = [d for d in dists if 150 < d < 44_850]
+    assert max(y - x for x, y in zip(middle, middle[1:])) == pytest.approx(mid, abs=0.01)
+
+
+def test_lidar_stations_short_paths_and_exclusions():
+    from fresnelkml.surface import lidar_stations
+    dists, mid, near = lidar_stations(0.0, 250.0, 250.0, 150.0, 3.0, 5, 25_000)  # windows overlap
+    assert mid == near == 3.0 and dists[0] == 0 and dists[-1] == 250
+    dists, mid, near = lidar_stations(500.0, 9_000.0, 10_000.0, 150.0, 3.0, 5, 25_000)  # exclusions beyond the windows
+    assert dists[0] == 500 and dists[-1] == 9_000 and mid == 3.0
+    dists, mid, near = lidar_stations(0.0, 20_000.0, 20_000.0, 10_000.0, 3.0, 5, 1_000)  # tiny budget
+    assert len(dists) <= 1_000 // 5 + 4 and near > 3.0
+
+
+def test_long_path_keeps_full_detail_in_the_close_ups(fake_chain):
+    sampler = DatasetSampler(lambda lat, lon: 0.0 if lon < TEN_KM_LON * 0.3 else None, spacing_m=3.0, max_points=2_000)
+    r = lidar(fake_chain, None, sampler=sampler)
+    assert r.surface_near_spacing_m == 3.0 and r.surface_spacing_m > 20
+    d = r.to_dict()["surface"]
+    gaps = [b["d_m"] - a["d_m"] for a, b in zip(d["plot_a"], d["plot_a"][1:])]
+    assert max(gaps) == pytest.approx(3.0, abs=0.01)
+    assert any("and every 3 m in the close-ups" in w for w in r.warnings)
+    # coverage and dataset shares are by distance, not by how many stations there are
+    assert r.surface_coverage == pytest.approx(0.3, abs=0.03)
+    assert sum(x["share"] for x in r.surface_datasets) == pytest.approx(0.3, abs=0.03)

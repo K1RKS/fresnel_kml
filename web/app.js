@@ -345,7 +345,8 @@ function showResult(data, units, picks = [], feedHeights = []) {
         : `Lidar was flown between ${span.oldest} and ${span.newest}`}</small>`;
       rows.push(["Min clearance over lidar surface",
         `<span class="badge ${sf.status}">${sf.status}</span> ${detail}${flown}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
-        + `every ${dfmt(sf.spacing_m)} across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
+        + `every ${dfmt(sf.spacing_m)}${sf.near_spacing_m && sf.near_spacing_m < sf.spacing_m - 0.01 ? ` (every ${dfmt(sf.near_spacing_m)} near the sites)` : ""}`
+        + ` across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
         + `ignored within ${dfmt(sf.clearance_a_m)} of ${esc(a.name)} and ${dfmt(sf.clearance_b_m)} of ${esc(b.name)}</small>`]);
     }
   }

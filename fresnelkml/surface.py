@@ -91,6 +91,42 @@ def grid_spacing(length_m: float, spacing_m: float, lines: int, max_points: int)
     return max(spacing_m, length_m / (stations - 1))
 
 
+NEAR_SHARE = 0.5  # the close-up windows may use at most this share of the point budget
+
+
+def lidar_stations(start: float, stop: float, distance: float, window: float, spacing: float, lines: int,
+                   max_points: int) -> tuple[list[float], float, float]:
+    """Distances along the path to sample, as (distances, spacing between the close-up windows, spacing in them).
+
+    The close-up windows next to each site get the full `spacing` first (unless they alone would need more
+    than half the point budget); the stretch between them gets whatever spacing the rest of the budget allows.
+    """
+    budget = max(4, max_points // max(1, lines))
+    a_end, b_start = min(stop, window), max(start, distance - window)
+    if window <= 0:
+        near, mid = [], (start, stop)
+    elif a_end >= b_start:
+        near, mid = [(start, stop)], None
+    else:
+        near = [(a, b) for a, b in ((start, a_end), (b_start, stop)) if b > a]
+        mid = (max(start, a_end), min(stop, b_start))
+    near_len = sum(b - a for a, b in near)
+    near_spacing = spacing
+    if near and near_len / spacing > budget * (NEAR_SHARE if mid else 1.0):
+        near_spacing = near_len / (budget * (NEAR_SHARE if mid else 1.0))
+    mid_spacing = near_spacing
+    if mid:
+        left = max(2, budget - int(near_len / near_spacing) - len(near))
+        mid_spacing = max(spacing, (mid[1] - mid[0]) / (left - 1))
+
+    dists: set[float] = set()
+    for (a, b), sp in [(seg, near_spacing) for seg in near] + ([(mid, mid_spacing)] if mid else []):
+        n = int((b - a) / sp)
+        dists.update(round(a + i * sp, 6) for i in range(n + 1))
+        dists.add(round(b, 6))
+    return sorted(dists), mid_spacing, near_spacing
+
+
 def _in_bbox(bbox, point) -> bool:
     if not bbox:
         return True

@@ -140,7 +140,9 @@ def _surface_lines(report: LinkReport) -> list[str]:
     flown = [flown_text(report.surface_datasets)] if flown_text(report.surface_datasets) else []
     return flown + [
         f"Lidar: {html.escape(sources)}, {100 * (report.surface_coverage or 0):.0f}% coverage, across "
-        f"\u00b1{opt.lidar_width:g} \u00d7 r1, every {fmt_distance(report.surface_spacing_m, u, 1)}; "
+        f"\u00b1{opt.lidar_width:g} \u00d7 r1, every {fmt_distance(report.surface_spacing_m, u, 1)}"
+        + (f" (every {fmt_distance(report.surface_near_spacing_m, u, 1)} near the sites)"
+           if (report.surface_near_spacing_m or 0) < (report.surface_spacing_m or 0) - 1e-9 else "") + "; "
         f"{fmt_height(opt.tree_height_m, u)} trees where there's no lidar",
         f"Ignored within {fmt_distance(opt.tree_clearance_a_m, u)} of {html.escape(report.site_a.name)} and "
         f"{fmt_distance(opt.tree_clearance_b_m, u)} of {html.escape(report.site_b.name)}",
