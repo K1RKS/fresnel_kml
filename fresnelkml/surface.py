@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass, field
 
 from .arcgis import ImageService
+from .cache import slug
 
 # Sample lines across the zone, as fractions of the lidar width (which is itself a fraction of r1).
 LATERAL_FRACTIONS = (0.0, -0.5, 0.5, -1.0, 1.0)
@@ -28,6 +31,7 @@ class SurfacePoint:
     r1_m: float
     clearance: float | None
     lidar: bool  # False: no lidar here, the fixed tree height was used
+    dataset: dict | None = None  # the lidar dataset of the worst sample: {"source", "name", "year"}
 
     @property
     def height_m(self) -> float:
@@ -41,6 +45,29 @@ class SurfaceSamples:
     failed: int = 0
     timed_out: int = 0
     errors: list[str] = field(default_factory=list)
+    datasets: list[tuple[int, int] | None] = field(default_factory=list)  # (source index, raster id) per value
+
+
+def dataset_label(d: dict | None) -> str:
+    """OLC Santiam 2018, or Some Survey (2016) when the name has no year in it."""
+    if not d:
+        return "unknown lidar"
+    name, year = d.get("name") or "unnamed lidar", d.get("year")
+    return f"{name} ({year})" if year and str(year) not in name else name
+
+
+def flown_years(datasets: list[dict]) -> tuple[int, int] | None:
+    """(oldest, newest) year of the lidar datasets used, or None when no year is known."""
+    years = [d["year"] for d in datasets if isinstance(d.get("year"), int)]
+    return (min(years), max(years)) if years else None
+
+
+def flown_text(datasets: list[dict]) -> str:
+    """Lidar flown in 2017, or Lidar flown between 2007 and 2018 when the datasets differ."""
+    span = flown_years(datasets)
+    if span is None:
+        return ""
+    return f"Lidar flown in {span[0]}" if span[0] == span[1] else f"Lidar flown between {span[0]} and {span[1]}"
 
 
 def lateral_clearance(dz: float, offset_m: float, r1_m: float) -> float:
@@ -80,23 +107,73 @@ class SurfaceSampler:
 
     def sample(self, points: list[tuple[float, float]], deadline: float | None, progress=None) -> SurfaceSamples:
         """`progress(done, total)` counts points for each source in turn."""
-        out = SurfaceSamples([None] * len(points), [None] * len(points))
+        out = SurfaceSamples([None] * len(points), [None] * len(points), datasets=[None] * len(points))
         todo = list(range(len(points)))
-        for src, service in self.services:
+        for si, (src, service) in enumerate(self.services):
             idx = [i for i in todo if _in_bbox(src.get("bbox"), points[i])]
             if not idx:
                 continue
             cache = self.caches.for_service(src["name"], "surface") if self.caches else None
             res = service.sample([points[i] for i in idx], threads=self.cfg.threads, deadline=deadline,
                                  cache=cache, progress=progress)
-            for i, v in zip(idx, res.values):
+            rasters = res.rasters or [None] * len(idx)
+            for i, v, rid in zip(idx, res.values, rasters):
                 if v is not None:
                     out.values[i] = v
                     out.labels[i] = src["label"]
+                    out.datasets[i] = None if rid is None else (si, rid)
             out.failed += res.failed
             out.timed_out += res.timed_out
             out.errors += res.errors
             todo = [i for i in todo if out.values[i] is None]
+        return out
+
+    def _meta_path(self, src: dict) -> str | None:
+        directory = getattr(self.caches, "directory", None) if self.caches else None
+        return os.path.join(directory, "datasets", f"{slug(src['name'])}.json") if directory else None
+
+    def _load_meta(self, src: dict) -> dict:
+        path = self._meta_path(src)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (TypeError, OSError, ValueError):
+            return {}
+
+    def _save_meta(self, src: dict, data: dict) -> None:
+        path = self._meta_path(src)
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass  # a cache we can't write only costs a lookup next time
+
+    def describe(self, wanted: dict[tuple[int, int], tuple[float, float]],
+                 deadline: float | None) -> dict[tuple[int, int], dict]:
+        """{(source index, raster id): {"source", "name", "year"}}, from the source's catalog (identify at a
+        point the raster covers). Answers are kept in the cache folder, so each dataset is looked up once."""
+        out = {}
+        for si, (src, service) in enumerate(self.services):
+            mine = {rid: pt for (s, rid), pt in wanted.items() if s == si}
+            if not mine:
+                continue
+            known = self._load_meta(src)
+            missing = {rid: pt for rid, pt in mine.items() if str(rid) not in known}
+            if missing:
+                found = service.datasets(missing, deadline=deadline)
+                if found:
+                    known.update({str(rid): info for rid, info in found.items()})
+                    self._save_meta(src, known)
+            for rid in mine:
+                info = known.get(str(rid))
+                if isinstance(info, dict):
+                    out[(si, rid)] = {"source": src["label"], "name": info.get("name"), "year": info.get("year")}
         return out
 
 

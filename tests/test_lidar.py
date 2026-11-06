@@ -84,6 +84,64 @@ def test_sample_chunks_and_cache(monkeypatch, tmp_path):
     assert again.values[:10] == pytest.approx([p[0] for p in pts[:10]])
 
 
+@pytest.mark.parametrize("raw,zorder,name,year", [
+    ("OLC_SANTIAM_2018_HIGHEST_HIT_OGIC_2011", 2018, "OLC Santiam 2018", 2018),
+    ("WILLAMETTE_RIVER_BATHY_2017_USACE_HIGHEST_HIT_UTM10N_VERTICAL_FEET", 2017,
+     "Willamette River Bathy 2017 USACE", 2017),
+    ("OLC_HOOD_TO_COAST_2007_HIGHEST_HIT_OGIC_HARN", 2007, "OLC Hood To Coast 2007", 2007),
+    ("COUNTY_SURVEY_DSM", 0, "County Survey", None),
+    ("CITY-FLIGHT_2016_FIRST_RETURN", None, "City Flight 2016", 2016),
+])
+def test_dataset_names_and_years(raw, zorder, name, year):
+    from fresnelkml.arcgis import dataset_name, dataset_year
+    assert dataset_name(raw) == name
+    assert dataset_year(raw, zorder) == year
+
+
+def test_raster_ids_survive_the_cache(monkeypatch, tmp_path):
+    from fresnelkml.cache import CacheSet
+
+    def post(url, form, timeout=10.0):
+        pts = json.loads(form["geometry"])["points"]
+        return {"samples": [{"locationId": i, "value": 1.0, "rasterId": 400 + i % 2} for i in range(len(pts))]}
+
+    monkeypatch.setattr(httpjson, "post_form_json", post)
+    svc = ImageService("https://example.test/ImageServer")
+    cache = CacheSet(str(tmp_path)).for_service("t", "surface")
+    pts = [(0.0, i * 0.001) for i in range(6)]
+    assert svc.sample(pts, cache=cache).rasters == [400, 401] * 3
+    monkeypatch.setattr(httpjson, "post_form_json", lambda *a, **k: pytest.fail("should come from the cache"))
+    assert svc.sample(pts, cache=cache).rasters == [400, 401] * 3
+
+
+def identify_get(calls):
+    def get(url, params=None, timeout=10.0):
+        calls.append(url)
+        x = json.loads(params["geometry"])["x"]
+        rid = 401 if x > 0.0005 else 400
+        return {"catalogItems": {"features": [
+            {"attributes": {"OBJECTID": 999, "Name": "OTHER_2001_HIGHEST_HIT", "ZOrder": 2001}},
+            {"attributes": {"OBJECTID": rid, "Name": f"OLC_TEST_{2000 + rid - 390}_HIGHEST_HIT", "ZOrder": 2000 + rid - 390}},
+        ]}}
+    return get
+
+
+def test_dataset_lookup_and_its_file_cache(monkeypatch, tmp_path):
+    from fresnelkml.cache import CacheSet
+    calls = []
+    monkeypatch.setattr(httpjson, "get_json", identify_get(calls))
+    cfg = SurfaceConfig([{"name": "x", "label": "X lidar", "url": "https://x.test/ImageServer", "units": "m",
+                          "bbox": None}])
+    sampler = SurfaceSampler(cfg, CacheSet(str(tmp_path)))
+    wanted = {(0, 400): (0.0, 0.0001), (0, 401): (0.0, 0.001)}
+    infos = sampler.describe(wanted, None)
+    assert infos == {(0, 400): {"source": "X lidar", "name": "OLC Test 2010", "year": 2010},
+                     (0, 401): {"source": "X lidar", "name": "OLC Test 2011", "year": 2011}}
+    assert len(calls) == 2 and all(c.endswith("/identify") for c in calls)
+    assert SurfaceSampler(cfg, CacheSet(str(tmp_path))).describe(wanted, None) == infos
+    assert len(calls) == 2  # the second sampler read them from the cache folder
+
+
 def test_sample_reports_progress(monkeypatch):
     monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: [1.0] * len(pts)))
     seen = []
@@ -333,3 +391,40 @@ def test_default_config_has_lidar(tmp_path, monkeypatch):
     monkeypatch.setattr("fresnelkml.config.DEFAULT_CONFIG_PATH", str(tmp_path / "nope.json"))
     cfg = load_config(env={})
     assert cfg.surface.sources[0]["url"].endswith("DIGITAL_SURFACE_MODEL_MOSAIC/ImageServer")
+
+
+class DatasetSampler(FakeSampler):
+    """Two datasets: 2009 lidar on the first half of the path, 2019 on the second."""
+
+    def sample(self, points, deadline, progress=None):
+        out = super().sample(points, deadline, progress)
+        out.datasets = [(0, 409 if lon < TEN_KM_LON / 2 else 419) for lat, lon in points]
+        return out
+
+    def describe(self, wanted, deadline):
+        return {key: {"source": "Fake lidar", "name": f"Survey {2000 + key[1] - 400}", "year": 2000 + key[1] - 400}
+                for key in wanted}
+
+
+def test_report_names_the_lidar_datasets(fake_chain):
+    r = lidar(fake_chain, None, sampler=DatasetSampler(lambda lat, lon: 45.0 if lon < TEN_KM_LON / 2 else 0.0))
+    shares = {d["name"]: d["share"] for d in r.surface_datasets}
+    assert set(shares) == {"Survey 2009", "Survey 2019"} and sum(shares.values()) == pytest.approx(1, abs=0.01)
+    assert r.surface_worst.dataset["year"] == 2009
+    assert any("flown in 2009; trees may be taller now" in w for w in r.warnings)
+    d = r.to_dict()["surface"]
+    assert d["datasets"][0]["name"].startswith("Survey") and d["worst"]["dataset"]["year"] == 2009
+    assert d["flown"] == {"oldest": 2009, "newest": 2019}
+    assert all(m["dataset"]["year"] == 2009 for m in d["markers"])
+    assert "Lidar flown between 2009 and 2019" in render_kml(r)
+    assert "Lidar flown between 2009 and 2019" in summary(r)
+    recent = lidar(fake_chain, None, sampler=DatasetSampler(lambda lat, lon: 45.0 if lon > TEN_KM_LON / 2 else 0.0))
+    assert recent.surface_worst.dataset["year"] == 2019
+    assert not any("trees may be taller" in w for w in recent.warnings)
+
+
+def test_flown_text():
+    from fresnelkml.surface import flown_text
+    assert flown_text([{"year": 2017}, {"year": 2017}]) == "Lidar flown in 2017"
+    assert flown_text([{"year": 2018}, {"year": 2007}, {"year": None}]) == "Lidar flown between 2007 and 2018"
+    assert flown_text([{"year": None}]) == "" and flown_text([]) == ""

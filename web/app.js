@@ -334,13 +334,17 @@ function showResult(data, units, picks = [], feedHeights = []) {
       const w = sf.worst;
       let detail = "n/a";
       if (w && w.clearance !== null) {
-        const what = w.lidar ? `lidar surface ${hfmt(w.height_m)} above ground` : `${hfmt(sf.fallback_height_m)} trees, no lidar here`;
+        const what = w.lidar ? `lidar surface ${hfmt(w.height_m)} above ground${w.dataset ? `, ${esc(datasetLabel(w.dataset))} lidar` : ""}`
+          : `${hfmt(sf.fallback_height_m)} trees, no lidar here`;
         const side = w.offset_m ? `, ${dfmt(Math.abs(w.offset_m))} off the line of sight` : "";
         detail = `${w.clearance.toFixed(2)} \u00d7 r1 (${what}${side}) at ${dfmt(w.d_m, 2)}`;
       }
       const sources = sf.sources.length ? sf.sources.join(", ") : "no lidar";
+      const span = sf.flown;
+      const flown = !span ? "" : `<br><small>${span.oldest === span.newest ? `Lidar flown in ${span.oldest}`
+        : `Lidar flown between ${span.oldest} and ${span.newest}`}</small>`;
       rows.push(["Min clearance over lidar surface",
-        `<span class="badge ${sf.status}">${sf.status}</span> ${detail}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
+        `<span class="badge ${sf.status}">${sf.status}</span> ${detail}${flown}<br><small>${esc(sources)}: ${Math.round(100 * sf.coverage)}% of the checked path, `
         + `every ${dfmt(sf.spacing_m)} across \u00b1${sf.width} \u00d7 r1; ${hfmt(sf.fallback_height_m)} trees where there's no lidar; `
         + `ignored within ${dfmt(sf.clearance_a_m)} of ${esc(a.name)} and ${dfmt(sf.clearance_b_m)} of ${esc(b.name)}</small>`]);
     }
@@ -507,8 +511,15 @@ function surfaceRuns(p) {
   return runs.filter((r) => r.length > 1);
 }
 
+// "OLC Santiam 2018", or "Some Survey (2016)" when the name has no year in it.
+function datasetLabel(d) {
+  const name = d.name || "unnamed lidar";
+  return d.year && !name.includes(String(d.year)) ? `${name} (${d.year})` : name;
+}
+
 function surfaceTip(q, from) {
-  const what = q.lidar ? `lidar surface ${hfmt(q.height_m)} above ground` : "trees (no lidar here)";
+  const what = q.lidar ? `lidar surface ${hfmt(q.height_m)} above ground${q.dataset ? ` (${esc(datasetLabel(q.dataset))})` : ""}`
+    : "trees (no lidar here)";
   const side = q.offset_m ? `, ${dfmt(Math.abs(q.offset_m))} off the line of sight` : "";
   return `${what}${side}: ${q.clearance.toFixed(2)} \u00d7 r1 at ${dfmt(q.d_m, 2)} from ${esc(from)}`;
 }

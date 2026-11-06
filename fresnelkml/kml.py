@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from . import geo
 from .analysis import CLEAR_RATIO, LinkReport, MeshStation, Options, Site, analyze
 from .coords import format_position
+from .surface import dataset_label, flown_text
 from .units import fmt_distance, fmt_gap, fmt_height
 
 KML_NS = "http://www.opengis.net/kml/2.2"
@@ -131,10 +132,13 @@ def _surface_lines(report: LinkReport) -> list[str]:
     worst = "n/a"
     if w is not None and w.clearance is not None:
         what = f"lidar surface {fmt_height(w.height_m, u)} above ground" if w.lidar else "fixed-height trees"
+        if w.lidar and w.dataset:
+            what += f", {html.escape(dataset_label(w.dataset))}"
         side = f", {fmt_distance(abs(w.offset_m), u, 2)} off the line of sight" if w.offset_m else ""
         worst = (f"{w.clearance:.2f} \u00d7 r1 ({what}{side}) at {fmt_distance(w.d_m, u, 2)}")
     sources = ", ".join(report.surface_sources) or "none"
-    return [
+    flown = [flown_text(report.surface_datasets)] if flown_text(report.surface_datasets) else []
+    return flown + [
         f"Lidar: {html.escape(sources)}, {100 * (report.surface_coverage or 0):.0f}% coverage, across "
         f"\u00b1{opt.lidar_width:g} \u00d7 r1, every {fmt_distance(report.surface_spacing_m, u, 1)}; "
         f"{fmt_height(opt.tree_height_m, u)} trees where there's no lidar",
@@ -301,7 +305,8 @@ def render_kml(report: LinkReport) -> str:
             pm = _sub(sf, "Placemark")
             kind = "lidar" if p.lidar else "trees"
             _sub(pm, "name", f"{kind} c={p.clearance:.2f} @ {fmt_distance(p.d_m, u, 2)}")
-            what = (f"Lidar surface {fmt_height(p.top_m, u)} ({fmt_height(p.height_m, u)} above ground)" if p.lidar
+            what = (f"Lidar surface {fmt_height(p.top_m, u)} ({fmt_height(p.height_m, u)} above ground"
+                    + (f", {html.escape(dataset_label(p.dataset))}" if p.dataset else "") + ")" if p.lidar
                     else f"No lidar: {fmt_height(opt.tree_height_m, u)} trees, tops {fmt_height(p.top_m, u)}")
             side = f", {fmt_distance(abs(p.offset_m), u, 2)} off the line of sight" if p.offset_m else ""
             _sub(pm, "description", f"{what}{side}, LOS {fmt_height(p.los_m, u)}, r1 {fmt_height(p.r1_m, u, 2)}")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -28,6 +29,26 @@ class SampleResult:
     failed: int = 0  # points in batches that errored
     timed_out: int = 0  # points in batches not finished within the time budget
     errors: list[str] = field(default_factory=list)
+    rasters: list[int | None] = field(default_factory=list)  # the service's dataset (raster) id for each value
+
+
+_RASTER_LABEL = re.compile(r"^raster:(\d+)$")
+_ACRONYMS = {"OLC", "USACE", "USGS", "NOAA", "FEMA", "DOGAMI", "ODOT", "BLM", "NRCS", "OSIP", "QL1", "QL2"}
+_NAME_NOISE = re.compile(r"_(HIGHEST_HIT|FIRST_RETURN|BARE_EARTH|DSM|DTM|DEM)(_.*)?$", re.IGNORECASE)
+
+
+def dataset_name(raw: str) -> str:
+    """A readable dataset name: OLC_SANTIAM_2018_HIGHEST_HIT_OGIC_2011 -> OLC Santiam 2018."""
+    words = _NAME_NOISE.sub("", raw).replace("-", "_").split("_")
+    return " ".join(w if w.upper() in _ACRONYMS or w.isdigit() else w.capitalize() for w in words if w) or raw
+
+
+def dataset_year(name: str, zorder) -> int | None:
+    """Image services that mosaic by date carry the year in ZOrder; otherwise take a year from the name."""
+    if isinstance(zorder, (int, float)) and 1990 <= zorder <= 2100:
+        return int(zorder)
+    years = [int(y) for y in re.findall(r"(?<!\d)(?:19|20)\d\d(?!\d)", name)]
+    return years[0] if years else None
 
 
 class ImageService:
@@ -43,6 +64,11 @@ class ImageService:
 
     def sample_batch(self, points: list[Point], timeout_s: float | None = None) -> list[float | None]:
         """One getSamples request for up to `chunk` points."""
+        return self.sample_batch_ids(points, timeout_s)[0]
+
+    def sample_batch_ids(self, points: list[Point],
+                         timeout_s: float | None = None) -> tuple[list[float | None], list[int | None]]:
+        """Like sample_batch, plus the raster (dataset) id each value came from."""
         if len(points) > self.chunk:
             raise ValueError(f"at most {self.chunk} points per request")
         geometry = {"points": [[round(lon, 7), round(lat, 7)] for lat, lon in points],
@@ -58,12 +84,13 @@ class ImageService:
         if "error" in data:
             err = data["error"] if isinstance(data["error"], dict) else {}
             if err.get("code") == 400:  # the whole batch is outside the service's coverage
-                return [None] * len(points)
+                return [None] * len(points), [None] * len(points)
             raise ImageServiceError(f"{self.url}: {err.get('message') or 'error response'}")
         samples = data.get("samples")
         if not isinstance(samples, list):
             raise ImageServiceError(f"{self.url}: response has no samples")
         out: list[float | None] = [None] * len(points)
+        rasters: list[int | None] = [None] * len(points)
         for s in samples:
             idx = s.get("locationId") if isinstance(s, dict) else None
             if not isinstance(idx, int) or not 0 <= idx < len(points):
@@ -74,7 +101,28 @@ class ImageService:
                 continue  # "NoData"
             if math.isfinite(value):
                 out[idx] = value * self.scale
-        return out
+                rid = s.get("rasterId")
+                rasters[idx] = rid if isinstance(rid, int) and not isinstance(rid, bool) else None
+        return out, rasters
+
+    def datasets(self, raster_points: dict[int, Point], timeout_s: float = 8.0, threads: int = 4,
+                 deadline: float | None = None) -> dict[int, dict]:
+        """{raster id: {"name", "year"}} for each id, looked up with identify at a point that id covers."""
+        def lookup(rid: int, point: Point) -> dict | None:
+            geometry = {"x": round(point[1], 7), "y": round(point[0], 7), "spatialReference": {"wkid": 4326}}
+            data = httpjson.get_json(f"{self.url}/identify", {
+                "geometry": json.dumps(geometry, separators=(",", ":")), "geometryType": "esriGeometryPoint",
+                "returnCatalogItems": "true", "returnGeometry": "false", "f": "json"}, timeout=timeout_s)
+            items = ((data or {}).get("catalogItems") or {}).get("features") or []
+            for item in items:
+                attrs = item.get("attributes") or {}
+                if attrs.get("OBJECTID") == rid and isinstance(attrs.get("Name"), str):
+                    return {"name": dataset_name(attrs["Name"]), "year": dataset_year(attrs["Name"], attrs.get("ZOrder"))}
+            return None
+
+        pairs = list(raster_points.items())
+        outcomes = run_parallel([lambda r=r, p=p: lookup(r, p) for r, p in pairs], threads, deadline)
+        return {rid: info for (rid, _), info in zip(pairs, outcomes) if isinstance(info, dict)}
 
     def sample(self, points: list[Point], *, threads: int = 4, deadline: float | None = None,
                cache=None, progress=None) -> SampleResult:
@@ -84,6 +132,7 @@ class ImageService:
         batches finish (from worker threads).
         """
         values: list[float | None] = [None] * len(points)
+        rasters: list[int | None] = [None] * len(points)
         todo = list(range(len(points)))
         if cache is not None:
             todo = []
@@ -92,8 +141,10 @@ class ImageService:
                     todo.append(i)
                 else:
                     values[i] = hit[0]
+                    m = _RASTER_LABEL.match(hit[1] or "")
+                    rasters[i] = int(m.group(1)) if m else None
         batches = [todo[i:i + self.chunk] for i in range(0, len(todo), self.chunk)]
-        result = SampleResult(values)
+        result = SampleResult(values, rasters=rasters)
         done = [len(points) - len(todo)]
         lock = threading.Lock()
         if progress:
@@ -107,7 +158,7 @@ class ImageService:
                 if remaining is not None and remaining <= 0.5:
                     raise TimeoutError
                 timeout = self.timeout_s if remaining is None else min(self.timeout_s, remaining)
-                return self.sample_batch([points[i] for i in batch], timeout)
+                return self.sample_batch_ids([points[i] for i in batch], timeout)
             finally:
                 if progress:
                     with lock:
@@ -123,10 +174,12 @@ class ImageService:
                 result.failed += len(batch)
                 result.errors.append(str(outcome))
             else:
-                for i, v in zip(batch, outcome):
+                for i, v, rid in zip(batch, *outcome):
                     values[i] = v
+                    rasters[i] = rid
                     if v is not None:
-                        fresh.append((points[i], v, cache.name if cache is not None else ""))
+                        label = f"raster:{rid}" if rid is not None else (cache.name if cache is not None else "")
+                        fresh.append((points[i], v, label))
         if cache is not None:
             cache.put_many(fresh)
         return result

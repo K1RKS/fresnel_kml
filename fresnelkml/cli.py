@@ -13,6 +13,7 @@ from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationChain, ElevationUnavailable
 from .kml import render_kml
 from .parsing import FEET, RequestError, parse_site_string, read_sites_csv
+from .surface import dataset_label, flown_text
 from .units import MILE, fmt_distance, fmt_gap, fmt_height
 from .webapi import safe_filename
 
@@ -167,10 +168,14 @@ def summary(report: LinkReport) -> str:
             t = "n/a"
             if w is not None and w.clearance is not None:
                 what = f"surface {fmt_height(w.height_m, u)} above ground" if w.lidar else "fixed-height trees"
+                if w.lidar and w.dataset:
+                    what += f", {dataset_label(w.dataset)}"
                 t = f"{w.clearance:.2f} x r1 ({what}) at {fmt_distance(w.d_m, u, 2)}"
             lines.append(f"  Lidar check ({', '.join(report.surface_sources) or 'no lidar'}, "
                          f"{100 * (report.surface_coverage or 0):.0f}% coverage): {report.surface_status}, "
                          f"min clearance {t}")
+            if flown_text(report.surface_datasets):
+                lines.append(f"    {flown_text(report.surface_datasets)}")
         if report.obstructions:
             h = 1 / FEET if u == "ft" else 1.0
             dist_unit, dist_scale = ("mi", 1 / MILE) if u == "ft" else ("km", 1 / 1000)

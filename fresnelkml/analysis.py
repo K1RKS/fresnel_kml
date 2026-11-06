@@ -12,8 +12,8 @@ from . import fresnel, geo
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
-from .surface import (LATERAL_FRACTIONS, SurfacePoint, grid_spacing, lateral_clearance, obstruction_markers,
-                      thin_for_plot)
+from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_years, grid_spacing, lateral_clearance,
+                      obstruction_markers, thin_for_plot)
 from .units import fmt_distance, fmt_height
 
 MIN_DISTANCE_M = 1.0
@@ -27,6 +27,7 @@ CLEAR_RATIO = 0.6
 END_WINDOW_M = 500 * 0.3048  # default length of the close-up terrain sampling next to each tower
 END_SAMPLES = 25  # samples over the default window; longer windows keep the same spacing
 MAX_END_SAMPLES = 200
+OLD_LIDAR_YEARS = 10  # warn when the worst point's lidar is older than this
 REQUEST_LIMIT_S = 40.0  # lidar fetching stops by then, well inside the web server's 60 s timeout
 
 
@@ -145,6 +146,7 @@ class LinkReport:
     surface_checked: bool = False
     surface_points: list[SurfacePoint] = field(default_factory=list)
     surface_sources: list[str] = field(default_factory=list)
+    surface_datasets: list[dict] = field(default_factory=list)  # {"source", "name", "year", "share"}, biggest first
     surface_coverage: float | None = None  # share of stations with lidar
     surface_spacing_m: float | None = None
     surface_worst: SurfacePoint | None = None
@@ -188,6 +190,9 @@ class LinkReport:
         return {
             "enabled": self.surface_checked,
             "sources": self.surface_sources,
+            "datasets": self.surface_datasets,
+            "flown": None if flown_years(self.surface_datasets) is None else dict(
+                zip(("oldest", "newest"), flown_years(self.surface_datasets))),
             "coverage": None if self.surface_coverage is None else round(self.surface_coverage, 3),
             "spacing_m": _r(self.surface_spacing_m),
             "width": self.options.lidar_width,
@@ -280,6 +285,7 @@ def _surface_point_dict(p: SurfacePoint) -> dict:
         "top_m": _r(p.top_m), "height_m": _r(p.height_m), "effective_m": _r(p.effective_m),
         "peak_m": _r(p.peak_m), "los_m": _r(p.los_m),
         "clearance": None if p.clearance is None else round(p.clearance, 3), "lidar": p.lidar,
+        "dataset": p.dataset,
     }
 
 
@@ -388,6 +394,30 @@ class _ProfileLookup:
         return getattr(a, attr) + f * (getattr(b, attr) - getattr(a, attr))
 
 
+def _describe_datasets(report: LinkReport, sampler, got, grid, station_keys: dict, worst_keys: dict,
+                       points: list[SurfacePoint], deadline: float | None) -> None:
+    """Name the lidar datasets (and the year each was flown) used along the path and at each station."""
+    used = {key for key in list(station_keys.values()) + list(worst_keys.values()) if key is not None}
+    if not used or not hasattr(sampler, "describe"):
+        return
+    keys = got.datasets
+    wanted = {}
+    for i, key in enumerate(keys):
+        if key in used and key not in wanted:
+            wanted[key] = (grid[i][1], grid[i][2])
+    # the identify lookups get a few seconds of their own, even if the samples used up the lidar budget
+    meta_deadline = time.monotonic() + 5 if deadline is None else max(deadline, time.monotonic() + 3)
+    infos = sampler.describe(wanted, meta_deadline)
+    for i, key in worst_keys.items():
+        points[i].dataset = infos.get(key)
+    counts: dict = {}
+    for key in station_keys.values():
+        if key in infos:
+            counts[key] = counts.get(key, 0) + 1
+    report.surface_datasets = [{**infos[key], "share": round(n / len(points), 3)}
+                               for key, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
 def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | None, progress=None) -> None:
     """LIDAR mode: sample the highest-hit surface across the zone; the fixed tree height fills gaps."""
     opt, distance, warnings = report.options, report.distance_m, report.warnings
@@ -417,7 +447,9 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
 
     lookup = _ProfileLookup(report.all_samples)
     ra, rb, k = report.site_a, report.site_b, len(fractions)
+    keys = got.datasets or [None] * len(got.values)
     points, covered = [], 0
+    station_keys, worst_keys = {}, {}  # station index -> dataset key of its centre / worst sample
     for si, (d, lat, lon, r1) in enumerate(stations):
         t = d / distance
         los = (1 - t) * ra.asl_m + t * rb.asl_m
@@ -439,10 +471,12 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
             peak = max(peak, v + bulge)
             c = lateral_clearance(los - v - bulge, y, r1) if usable else None
             if worst is None or (c is not None and (worst[0] is None or c < worst[0])):
-                worst = (c, y, plat, plon, v)
-        c, y, plat, plon, v = worst
+                worst = (c, y, plat, plon, v, keys[si * k + j])
+        c, y, plat, plon, v, worst_keys[len(points)] = worst
+        station_keys[len(points)] = keys[si * k]
         points.append(SurfacePoint(d, plat, plon, y, v, ground, effective, peak, los, r1, c, True))
 
+    _describe_datasets(report, sampler, got, grid, station_keys, worst_keys, points, deadline)
     report.surface_checked = True
     report.surface_points = points
     report.surface_spacing_m = spacing
@@ -468,6 +502,10 @@ def check_surface(report: LinkReport, site_a: Site, sampler, deadline: float | N
         warnings.append(f"Lidar source error: {got.errors[0][:160]}")
     if spacing > sampler.cfg.spacing_m + 1e-9:
         warnings.append(f"Long path: lidar was sampled every {fmt_distance(spacing, u, 1)}.")
+    w = report.surface_worst
+    year = w.dataset.get("year") if w is not None and w.lidar and w.dataset else None
+    if isinstance(year, int) and time.gmtime().tm_year - year > OLD_LIDAR_YEARS:
+        warnings.append(f"The lidar at the worst point was flown in {year}; trees may be taller now.")
 
 
 def terrain_station_count(distance_m: float, stations: int) -> int:
