@@ -114,6 +114,21 @@ def test_raster_ids_survive_the_cache(monkeypatch, tmp_path):
     assert svc.sample(pts, cache=cache).rasters == [400, 401] * 3
 
 
+def test_samples_cached_without_raster_ids_are_fetched_again(monkeypatch, tmp_path):
+    from fresnelkml.cache import CacheSet
+    calls = []
+    monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: [2.0] * len(pts), calls))
+    cache = CacheSet(str(tmp_path)).for_service("t", "surface")
+    pts = [(0.0, i * 0.001) for i in range(4)]
+    cache.put_many([(p, 1.0, "surface-t") for p in pts[:2]])  # stored by an older version
+    res = ImageService("https://example.test/ImageServer").sample(pts, cache=cache)
+    assert [n for _, n, _ in calls] == [4] and res.values == [2.0] * 4
+    assert res.rasters == [None] * 4  # this service sends no rasterId
+    calls.clear()
+    ImageService("https://example.test/ImageServer").sample(pts, cache=cache)
+    assert calls == []  # "raster:none" entries are proper cache hits
+
+
 def identify_get(calls):
     def get(url, params=None, timeout=10.0):
         calls.append(url)

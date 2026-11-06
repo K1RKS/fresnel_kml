@@ -32,7 +32,7 @@ class SampleResult:
     rasters: list[int | None] = field(default_factory=list)  # the service's dataset (raster) id for each value
 
 
-_RASTER_LABEL = re.compile(r"^raster:(\d+)$")
+_RASTER_LABEL = re.compile(r"^raster:(\d+|none)$")
 _ACRONYMS = {"OLC", "USACE", "USGS", "NOAA", "FEMA", "DOGAMI", "ODOT", "BLM", "NRCS", "OSIP", "QL1", "QL2"}
 _NAME_NOISE = re.compile(r"_(HIGHEST_HIT|FIRST_RETURN|BARE_EARTH|DSM|DTM|DEM)(_.*)?$", re.IGNORECASE)
 
@@ -137,12 +137,12 @@ class ImageService:
         if cache is not None:
             todo = []
             for i, hit in enumerate(cache.get_many(points)):
-                if hit is None:
+                m = _RASTER_LABEL.match(hit[1] or "") if hit is not None else None
+                if m is None:  # not cached, or cached before raster ids were kept: fetch it (again)
                     todo.append(i)
                 else:
                     values[i] = hit[0]
-                    m = _RASTER_LABEL.match(hit[1] or "")
-                    rasters[i] = int(m.group(1)) if m else None
+                    rasters[i] = None if m.group(1) == "none" else int(m.group(1))
         batches = [todo[i:i + self.chunk] for i in range(0, len(todo), self.chunk)]
         result = SampleResult(values, rasters=rasters)
         done = [len(points) - len(todo)]
@@ -178,8 +178,7 @@ class ImageService:
                     values[i] = v
                     rasters[i] = rid
                     if v is not None:
-                        label = f"raster:{rid}" if rid is not None else (cache.name if cache is not None else "")
-                        fresh.append((points[i], v, label))
+                        fresh.append((points[i], v, f"raster:{'none' if rid is None else rid}"))
         if cache is not None:
             cache.put_many(fresh)
         return result
