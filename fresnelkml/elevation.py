@@ -110,6 +110,40 @@ class OpenTopoDataProvider(ElevationProvider):
         return out
 
 
+class OpenMeteoProvider(ElevationProvider):
+    """Global elevations from the Open-Meteo API (Copernicus DEM, about 90 m).
+
+    The public service sends Access-Control-Allow-Origin, so the browser can call it.
+    The public OpenTopoData API does not.
+    """
+
+    type = "open-meteo"
+
+    def __init__(self, name: str, url: str = "https://api.open-meteo.com/v1/elevation",
+                 batch: int = 100, min_interval_s: float = 0.0, timeout_s: float = 10.0):
+        super().__init__(name)
+        self.url = url
+        self.batch = batch
+        self.min_interval_s = min_interval_s
+        self.timeout_s = timeout_s
+
+    def fetch(self, points):
+        params = {"latitude": ",".join(f"{lat:.6f}" for lat, _ in points),
+                  "longitude": ",".join(f"{lon:.6f}" for _, lon in points)}
+        try:
+            data = httpjson.get_json(self.url, params, timeout=self.timeout_s)
+        except httpjson.HttpError as exc:
+            raise ElevationError(str(exc)) from exc
+        elevs = data.get("elevation") if isinstance(data, dict) else None
+        if not isinstance(elevs, list) or len(elevs) != len(points):
+            raise ElevationError(f"{self.name}: bad response")
+        out = []
+        for elev in elevs:
+            value = _as_float(elev)
+            out.append(None if value is None else (value, self.name))
+        return out
+
+
 class OpenElevationProvider(ElevationProvider):
     type = "open-elevation"
 

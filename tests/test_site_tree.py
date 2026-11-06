@@ -44,7 +44,9 @@ def run_cgi(site_dir, method="POST", body=b"", query="", extra_env=None):
 def test_tree_layout(built):
     out, tar = built
     site = os.path.join(out, "site")
-    for rel in ("index.html", "app.js", "style.css", "VERSION", "api/fresnel.cgi", "lib/fresnelkml/webapi.py",
+    for rel in ("index.html", "app.js", "api.js", "engine.js", "config.json", "style.css", "VERSION",
+                ".nojekyll",
+                "api/fresnel.cgi", "lib/fresnelkml/webapi.py", "lib/fresnelkml.json",
                 "assets/leaflet/leaflet.js", "assets/leaflet/leaflet.css", "assets/leaflet/LICENSE",
                 "assets/leaflet/images/layers.png"):
         assert os.path.isfile(os.path.join(site, rel)), rel

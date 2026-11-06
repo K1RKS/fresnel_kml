@@ -1,6 +1,5 @@
 "use strict";
 
-const API = "api/fresnel.cgi";
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const DECIMAL_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
@@ -57,7 +56,7 @@ function setupSite(fs) {
 async function parseText(text, axis) {
   const params = new URLSearchParams({ parse: text });
   if (axis) params.set("axis", axis);
-  const resp = await fetch(`${API}?${params}`);
+  const resp = await apiFetch(`${API}?${params}`);
   return resp.ok ? resp.json() : null;
 }
 
@@ -111,7 +110,7 @@ async function decodeField(fs, input) {
   const params = new URLSearchParams({ parse: text });
   if (axis) params.set("axis", axis);
   try {
-    const resp = await fetch(`${API}?${params}`);
+    const resp = await apiFetch(`${API}?${params}`);
     const data = await resp.json();
     if (!resp.ok) {
       out.textContent = data.error || "Not recognised";
@@ -416,7 +415,7 @@ const mapGroups = {};
 
 async function loadMapConfig() {
   try {
-    const resp = await fetch(`${API}?map`);
+    const resp = await apiFetch(`${API}?map`);
     if (resp.ok) mapConfig = await resp.json();
   } catch (err) {
     /* no tile servers: the map stays blank but overlays still draw */
@@ -977,7 +976,7 @@ async function submit(ev) {
   const feedHeights = SITE_KEYS.map(feedHeight);
   showProgress({ stage: "start" });
   try {
-    const resp = await fetch(API, {
+    const resp = await apiFetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
@@ -989,7 +988,7 @@ async function submit(ev) {
       } catch (err) {
         /* not JSON: report the status */
       }
-      showError(data.error || `Server returned HTTP ${resp.status}.`, data.field);
+      showError(data.error || `The request failed (HTTP ${resp.status}).`, data.field);
       return;
     }
     let data = null;
@@ -1075,7 +1074,7 @@ function disableLidar() {
 
 async function loadSources() {
   try {
-    const resp = await fetch(`${API}?sources`);
+    const resp = await apiFetch(`${API}?sources`);
     if (!resp.ok) return;
     const data = await resp.json();
     const sel = $("#elev_source");
@@ -1120,8 +1119,6 @@ function init() {
   updateUnitLabels();
   $("#link-form").addEventListener("submit", submit);
   $("#download").addEventListener("click", download);
-  const curl = $("#curl-example");
-  curl.textContent = curl.textContent.replace("https://HOST/site/api/fresnel.cgi", new URL(API, location.href).href);
   updateLookupHint();
   loadSources();
   loadMapConfig();

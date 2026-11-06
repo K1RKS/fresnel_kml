@@ -3,7 +3,7 @@ import pytest
 from fresnelkml import Options, Site, analyze, elevation, httpjson
 from fresnelkml.cache import CacheSet
 from fresnelkml.elevation import (MISSING, ElevationChain, ElevationError, ElevationUnavailable,
-                                  OpenElevationProvider, OpenTopoDataProvider, USGSProvider)
+                                  OpenElevationProvider, OpenMeteoProvider, OpenTopoDataProvider, USGSProvider)
 
 from conftest import FakeProvider
 
@@ -39,6 +39,45 @@ def test_opentopodata_null_and_error(monkeypatch):
     monkeypatch.setattr(httpjson, "get_json", lambda *a, **k: {"status": "INVALID_REQUEST", "error": "bad"})
     with pytest.raises(ElevationError, match="bad"):
         OpenTopoDataProvider("otd").fetch([(0, 0)])
+
+
+def test_open_meteo_request_and_parse(monkeypatch):
+    seen = {}
+
+    def fake_get(url, params=None, timeout=10):
+        seen["url"], seen["params"] = url, params
+        n = len(params["latitude"].split(","))
+        return {"elevation": [10.0 + i for i in range(n)]}
+
+    monkeypatch.setattr(httpjson, "get_json", fake_get)
+    out = OpenMeteoProvider("om").fetch([(45.0, -122.0), (46.0, -121.5)])
+    assert seen["url"] == "https://api.open-meteo.com/v1/elevation"
+    assert seen["params"] == {"latitude": "45.000000,46.000000", "longitude": "-122.000000,-121.500000"}
+    assert out == [(10.0, "om"), (11.0, "om")]
+    monkeypatch.setattr(httpjson, "get_json", lambda *a, **k: {"elevation": [None]})
+    assert OpenMeteoProvider("om").fetch([(0, 0)]) == [None]
+    monkeypatch.setattr(httpjson, "get_json", lambda *a, **k: {"elevation": [1.0]})
+    with pytest.raises(ElevationError, match="bad response"):
+        OpenMeteoProvider("om").fetch([(0, 0), (1, 1)])
+
+
+def test_failed_source_falls_through_to_open_meteo(monkeypatch):
+    def fake_get(url, params=None, timeout=10):
+        if "open-meteo" not in url:
+            raise httpjson.HttpError("blocked")
+        n = len(params["latitude"].split(","))
+        return {"elevation": [3.0] * n}
+
+    monkeypatch.setattr(httpjson, "get_json", fake_get)
+    from fresnelkml.config import parse_config
+    cfg = parse_config({"elevation": {"retries": 0, "chain": [
+        {"name": "otd", "type": "opentopodata", "min_interval_s": 0, "retries": 0},
+        {"name": "meteo", "type": "open-meteo", "min_interval_s": 0},
+    ]}})
+    report = analyze(Site("A", 37, -122, agl_m=10), Site("B", 37.01, -122, agl_m=10),
+                     Options(terrain_check=False), config=cfg)
+    assert report.site_a.ground_source == "meteo"
+    assert report.site_b.ground_source == "meteo"
 
 
 def test_open_elevation_and_usgs(monkeypatch):
