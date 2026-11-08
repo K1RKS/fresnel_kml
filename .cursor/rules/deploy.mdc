@@ -1,0 +1,42 @@
+---
+description: How to deploy fresnel_kml and fresnel_kml_test to internal-nginx without touching anything else
+alwaysApply: true
+---
+
+# Deploying the web sites
+
+`/home/webposter/html` on `internal-nginx` is a symlink to `/var/www/html`, the web root for **every** site on that server. Only ever write inside the two fresnel folders.
+
+| Site | Built from | Destination (exact) |
+|------|------------|---------------------|
+| `https://test.k1rks.me/fresnel_kml/` | `origin/main`, always | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml/` |
+| `https://test.k1rks.me/fresnel_kml_test/` | `origin/site_selection_update` | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml_test/` |
+
+## Rules
+
+- Never use `rsync --delete` (or any delete) unless the user explicitly asks for it in that turn.
+- Never shorten or reconstruct the destination from memory or search snippets; use the table above, spelled out in full.
+- Build each site from its branch in a temporary worktree, not from whatever is checked out.
+- Check the destination folder exists, then dry-run (`rsync -n -i`) and confirm it only touches files inside that folder, then copy.
+- Verify afterwards: the page and `api/fresnel.cgi?sources` return 200.
+
+## Commands
+
+```bash
+git fetch origin
+git worktree add --detach /tmp/fk_main origin/main
+git worktree add --detach /tmp/fk_test origin/site_selection_update
+(cd /tmp/fk_main && python3 tools/build_site.py --name fresnel_kml --no-tarball)
+(cd /tmp/fk_test && python3 tools/build_site.py --name fresnel_kml_test --no-tarball)
+
+BASE=/home/webposter/html/test.k1rks.me
+ssh internal-nginx "test -d $BASE/fresnel_kml && test -d $BASE/fresnel_kml_test"
+OPTS='-a --exclude __pycache__ --chmod=Dug+rwx,Do+rx,Fug+rw,Fo+r'
+rsync $OPTS -n -i /tmp/fk_main/dist/fresnel_kml/      internal-nginx:$BASE/fresnel_kml/
+rsync $OPTS -n -i /tmp/fk_test/dist/fresnel_kml_test/ internal-nginx:$BASE/fresnel_kml_test/
+# review the dry run, then repeat both without -n -i
+
+git worktree remove /tmp/fk_main && git worktree remove /tmp/fk_test
+```
+
+Keep the `+` permission modes: a fixed mode such as `F664` drops the execute bit from `api/fresnel.cgi` and the API returns 403.
