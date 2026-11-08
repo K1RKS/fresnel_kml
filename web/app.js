@@ -750,7 +750,7 @@ function readoutEntry(plot, m, pin) {
     lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
       + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
   }
-  if (hasValue(m.bulge)) lines.push(`Earth curvature here: ${hfmt(m.bulge, 2)} (included in the ground height)`);
+  if (hasValue(m.bulge) && $("#show_curvature").checked) lines.push(`Earth curvature here: ${hfmt(m.bulge, 2)} (included in the ground height)`);
   if (hasValue(m.top) && hasValue(m.ground)) {
     const name = { lidar: "lidar top", fallback: "tree top (no lidar here)", tree: "tree top" }[m.topKind];
     const ds = m.dataset ? ` (${esc(datasetLabel(m.dataset))})` : "";
@@ -1135,6 +1135,13 @@ function init() {
   loadMapConfig();
   setupMapViews();
   MEASURED_PLOTS.forEach((sel) => setupMeasure($(sel)));
+  const curvature = $("#show_curvature");
+  const syncCurvature = () => {
+    $("#profile-box").classList.toggle("hide-curvature", !curvature.checked);
+    MEASURED_PLOTS.forEach((sel) => renderMeasure($(sel)));
+  };
+  curvature.addEventListener("change", syncCurvature);
+  syncCurvature();
   initSites();
 }
 

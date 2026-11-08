@@ -114,6 +114,7 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .profile-plot .bulge { fill: rgba(73, 80, 87, 0.14); stroke: none; }
 .profile-plot .bulge-edge { stroke: #495057; stroke-width: 1.2; stroke-dasharray: 6 3; fill: none; }
 .profile-plot .flat-ground { stroke: #8a6d3b; stroke-width: 1; stroke-dasharray: 1 2; opacity: 0.8; fill: none; }
+.hide-curvature .bulge, .hide-curvature .bulge-edge, .hide-curvature .flat-ground, .hide-curvature .curvature-only { display: none; }
 .profile-plot .los { stroke: #c9a000; stroke-width: 2; fill: none; }
 .profile-plot .zone { stroke: #2b8a3e; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
 .profile-plot .r60 { stroke: #e8590c; stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; }

@@ -128,6 +128,7 @@
         <label>Fresnel zone <input id="zone" type="number" min="1" max="10" value="1"></label>
         <label class="inline"><input id="sixty" type="checkbox" checked> Include 60% zone (hidden by default)</label>
         <label>k factor <input id="k" type="number" step="any" value="1.3333" min="0.1"></label>
+        <label class="inline"><input id="show_curvature" type="checkbox"> Show earth curvature on the profile</label>
         <label><span>Clutter height (<span class="unit">m</span>)</span> <input id="clutter" type="number" step="any" value="0" min="0"></label>
         <label><span>Close-up profiles (<span class="unit">m</span>)</span> <input id="end_window" type="number" step="any" value="500" min="10" title="How much of the path next to each site the First / Last close-up profiles cover"></label>
       </div>
@@ -182,7 +183,7 @@
     <div id="map" role="region" aria-label="Map of the link"></div>
     <p class="legend"><span class="lg zone-fill"></span>Fresnel zone (top-down) <span class="lg sixty-fill"></span>60% zone (in the layer menu) <span class="lg los"></span>line of sight <span class="lg-dot"></span>terrain below 60% <span class="lg-dot tree"></span>trees or lidar surface below 60% &middot; click the map to zoom with the scroll wheel</p>
   </div>
-  <div id="profile-box">
+  <div id="profile-box" class="hide-curvature">
     <h3>Terrain profile</h3>
     <h4 id="profile-title-main" class="plot-title">Whole path</h4>
     <svg id="profile-main" class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" aria-label="Terrain profile, whole path"></svg>
@@ -193,7 +194,7 @@
     <h4 id="profile-title-b" class="plot-title"></h4>
     <svg id="profile-b" class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" aria-label="Terrain profile next to site B"></svg>
     <div class="measure-readout" aria-live="polite"></div>
-    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="lg flat-ground"></span>ground without curvature <span class="lg-bulge"></span>earth curvature (bulge) <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees (fixed height) <span class="lg-lidar"></span>lidar surface <span class="lg-dot tree"></span>clearance over trees or lidar below 60%</p>
+    <p class="legend"><span class="lg ground"></span>ground (+ bulge, clutter) <span class="curvature-only"><span class="lg flat-ground"></span>ground without curvature</span> <span class="curvature-only"><span class="lg-bulge"></span>earth curvature (bulge)</span> <span class="lg los"></span>line of sight <span class="lg zone"></span>Fresnel zone bottom <span class="lg r60"></span>60% line <span class="lg mast"></span>antenna mast <span class="lg-dot"></span>clearance below 60% <span class="lg-trees"></span>trees (fixed height) <span class="lg-lidar"></span>lidar surface <span class="lg-dot tree"></span>clearance over trees or lidar below 60%</p>
   </div>
 </section>
 
