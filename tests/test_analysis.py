@@ -107,6 +107,8 @@ def test_report_dict_is_json_ready(fake_chain):
     assert data["status"] == "CLEAR"
     assert data["sites"][0]["display"] == "0.0000000, 0.0000000"
     assert data["profile"][32]["zone_bottom_m"] == pytest.approx(10 - 11.37, abs=0.05)
+    assert data["profile"][32]["bulge_m"] == pytest.approx(1.47, abs=0.02)
+    assert data["profile"][0]["bulge_m"] == data["profile"][-1]["bulge_m"] == 0
     assert data["zone_color"]["random"] is True
     assert len(data["profile_a"]) == len(data["profile_b"]) == 26
     assert data["end_window_m"] == pytest.approx(152.4)

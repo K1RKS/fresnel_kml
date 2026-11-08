@@ -276,8 +276,8 @@ def _r(value, digits: int = 2):
 def _point_dict(p: ProfilePoint) -> dict:
     return {
         "d_m": _r(p.d_m), "lat": round(p.lat, 7), "lon": round(p.lon, 7),
-        "ground_m": _r(p.ground_m), "effective_m": _r(p.effective_m), "los_m": _r(p.los_m),
-        "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
+        "ground_m": _r(p.ground_m), "bulge_m": _r(p.bulge_m, 3), "effective_m": _r(p.effective_m),
+        "los_m": _r(p.los_m), "r1_m": _r(p.r1_m, 3), "zone_bottom_m": _r(p.los_m - p.r1_m),
         "r60_bottom_m": _r(p.los_m - CLEAR_RATIO * p.r1_m),
         "clearance": None if p.clearance is None else round(p.clearance, 3),
         "tree_top_m": _r(p.tree_top_m),

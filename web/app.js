@@ -588,6 +588,13 @@ function drawPlot(svg, p, opts) {
     parts.push(`<text x="${x(d)}" y="${H - 10}" text-anchor="${anchor}">${label}</text>`);
   }
   parts.push(`<path class="ground" d="${ground}"/>`);
+  if (p.some((q) => hasValue(q.bulge_m))) {
+    const bulge = (q) => q.bulge_m || 0;
+    const arc = p.map((q) => `${x(q.d_m).toFixed(1)},${y(yMin + bulge(q)).toFixed(1)}`);
+    parts.push(`<path class="bulge" d="M${x(d0)},${y(yMin)}L${arc.join("L")}L${x(d1)},${y(yMin)}Z"/>`,
+      `<path class="bulge-edge" d="M${arc.join("L")}"/>`,
+      `<path class="flat-ground" d="M${p.map((q) => `${x(q.d_m).toFixed(1)},${y(q.effective_m - bulge(q)).toFixed(1)}`).join("L")}"/>`);
+  }
   for (const run of treeRuns(p)) {
     const top = run.map((q) => `${x(q.d_m).toFixed(1)},${y(q.tree_top_m).toFixed(1)}`);
     const bottom = run.slice().reverse().map((q) => `${x(q.d_m).toFixed(1)},${y(q.effective_m).toFixed(1)}`);
@@ -685,7 +692,7 @@ function measureAt(plot, d) {
   const p = plot.p;
   const m = {
     d, ground: interp(p, d, "effective_m"), los: interp(p, d, "los_m"), zone: interp(p, d, "zone_bottom_m"),
-    sixty: interp(p, d, "r60_bottom_m"), top: null, topKind: null, dataset: null,
+    sixty: interp(p, d, "r60_bottom_m"), bulge: interp(p, d, "bulge_m"), top: null, topKind: null, dataset: null,
   };
   if (plot.mode === "trees") {
     m.top = interp(p, d, "tree_top_m");
@@ -743,6 +750,7 @@ function readoutEntry(plot, m, pin) {
     lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
       + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
   }
+  if (hasValue(m.bulge)) lines.push(`Earth curvature here: ${hfmt(m.bulge, 2)} (included in the ground height)`);
   if (hasValue(m.top) && hasValue(m.ground)) {
     const name = { lidar: "lidar top", fallback: "tree top (no lidar here)", tree: "tree top" }[m.topKind];
     const ds = m.dataset ? ` (${esc(datasetLabel(m.dataset))})` : "";
