@@ -4,25 +4,38 @@ Generates a Google Earth Pro KML file showing the line of sight and the Fresnel 
 
 It comes in three forms that share one Python package (`fresnelkml/`):
 
-- a **web service**: a static page plus a JSON API, deployed as one folder dropped into an NGINX web root and run through fcgiwrap;
+- a **web page**: static files. The analysis runs in the browser through [Pyodide](https://pyodide.org/) (CPython compiled to WebAssembly), and elevation and lidar requests go from the browser to those services;
 - a **command-line tool**: `fresnel_kml.py`;
 - a **library**: `build_kml(site_a, site_b, options)` and `analyze(...)`.
 
+The same package still includes an optional HTTP API (`web/api/fresnel.cgi`) for scripted use. The page no longer calls it.
+
 The functional spec is [docs/SPEC.md](docs/SPEC.md); the implementation plan and design decisions are in [docs/PLAN.md](docs/PLAN.md).
 
-Requirements: Python 3.10 or newer. Nothing else is required. `requests` and `pyproj` are used when installed (`pyproj` gives WGS-84 geodesics instead of a spherical model).
+Requirements: Python 3.10 or newer for the command-line tool, the library, and building the page. The page itself needs a current browser. `requests` and `pyproj` are used when installed on the command line (`pyproj` gives WGS-84 geodesics instead of a spherical model; the browser build uses the spherical model).
 
-## Web service
+## Web page
 
-Build the drop-in folder and tarball:
+Build the drop-in folder and tarball. This downloads the pinned Pyodide runtime (about 15 MB) into `web/pyodide/` the first time; that directory is not committed:
 
 ```bash
-python3 tools/build_site.py          # -> dist/site/ and dist/fresnel-site.tar.gz
+make site                            # or: python3 tools/build_site.py
+                                     # -> dist/site/ and dist/fresnel-site.tar.gz
 ```
 
-Install it on the server with `tar xzf fresnel-site.tar.gz -C /var/www/html/`. The one-time NGINX and fcgiwrap setup is in [deploy/INSTALL.md](deploy/INSTALL.md).
+Install it on the server with `tar xzf fresnel-site.tar.gz -C /var/www/html/`. NGINX only has to serve the folder. The optional CGI API, and the headers a node feed needs, are in [deploy/INSTALL.md](deploy/INSTALL.md).
 
-For local development, `python3 tools/dev_server.py` serves the page at http://127.0.0.1:8000/ with the API behind it.
+The first visit downloads the runtime and then the browser keeps it. For local development, run `make serve` (or `python3 tools/fetch_pyodide.py` once, then `python3 tools/dev_server.py`), which serves the page at http://127.0.0.1:8000/.
+
+A push to `main` runs the tests, then publishes `dist/site/` with [GitHub Pages](https://docs.github.com/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site). In the repository settings, set the Pages source to GitHub Actions. The build includes an empty `.nojekyll` so Pages serves the WebAssembly files unchanged. The site is `https://<user>.github.io/<repo>/`.
+
+The page reads `config.json` in the site folder. It cannot see `/etc/fresnelkml/config.json`, which is only for the command line and the optional CGI API. Edit the site file to change elevation sources, the lidar service, map tiles, or the node feed, then reload.
+
+Public `api.opentopodata.org` does not allow browser requests (it sends no `Access-Control-Allow-Origin`). The shipped chain still lists it, and a failure falls through to Open-Meteo (global, about 90 m) and then Open-Elevation. USGS 3DEP and the Oregon DOGAMI lidar service do allow browser requests. A self-hosted OpenTopoData works when that server sends `Access-Control-Allow-Origin`. `local_hgt` folders are for the command line and the CGI API; the browser has no server disk to read. Lidar is sampled one batch at a time, so a long path takes longer than it does on the server.
+
+Lookups are stored in this browser, in IndexedDB, one SQLite file per service, with the size limits in `config.json` (`cache.max_mb`, 256 MB each by default). The cache survives a reload. Clearing the site's data in the browser deletes it.
+
+### API
 
 ### API
 
@@ -48,11 +61,11 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Progress** (what the web page uses): add `"progress": true` (with `"format": "json"`) and the response is `application/x-ndjson`, one JSON object per line as the work happens: `{"progress": {"stage", "done", "total"}}` for the stages `start`, `ground`, `lidar` (samples done of total) and `report`, then `{"result": {"kml", "report", "warnings"}}` or `{"error", "field", "status"}`. The response carries `X-Accel-Buffering: no` so NGINX passes each line straight through; fcgiwrap also needs `fastcgi_param NO_BUFFERING 1;` in the API's `location` (see [deploy/nginx-fresnel.conf](deploy/nginx-fresnel.conf)), or it holds the lines back until the result.
 - `GET ?sources` lists the configured elevation sources and lidar surface sources (`surface`); `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
 - `GET ?ground&lat=LAT&lon=LON` (or `&position=TEXT`, plus an optional `&source=NAME`) looks up the ground elevation at one point and returns `{"lat", "lon", "ground_m", "source", "assumed_zero"}`.
-- `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
+- `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error. `POST ?nodes=FILENAME` with a Nodographer `nodes.json` body returns that same shape for the file and stores nothing.
 
 ### Mesh node picker
 
-When the server has a Nodographer feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), two tabs appear above the sites:
+When a Nodographer feed is configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), two tabs appear above the sites:
 
 - **Node selection:** each site gets a "Mesh node" box. As you type, matching nodes are listed with the match in bold, and the first name that starts with what you typed is completed in the box; Tab or Enter accepts it, and the arrow keys or the mouse pick another. Once one site is picked, the other site's list starts with that node's RF links, nearest first. You can still type a site by hand without picking a node.
 - **Link selection:** Site A must be a mesh node, and Site B is chosen from a "Link from" list of Site A's RF links (nearest first, with distance, bearing and signal). Choosing a link fills Site B and sets the frequency from Site A. A link to a node the feed has no location for is marked "(no location in the feed)"; choosing it fills Site B's name and the frequency, and you enter its position and antenna height.
@@ -65,7 +78,7 @@ Under each site's heights, "Ground here (lookup)" shows what the elevation looku
 
 The page remembers the mode, the picks, your changes and the "Along the path" settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
-For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
+For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The browser fetches each feed itself, so the feed must send `Access-Control-Allow-Origin` (or the page must be hosted on the feed's own origin). Without that, the remote list stays empty. **Load a nodes.json file** reads a Nodographer file from this computer instead, and a node in that file wins over the same id from a remote feed. The file is not remembered after a reload. Remote feeds are cached in this browser for 5 minutes. The optional CGI API still fetches feeds on the server, where no CORS header is needed; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
 ### Map
 
@@ -87,7 +100,7 @@ By default the server uses the USGS 3DEP bare-earth image service (lidar-derived
 - **Trees**: a fixed tree height (default 100 ft) everywhere along the path. Drawn in green.
 - **LIDAR**: the highest-hit lidar surface (tree tops, roofs and anything else standing), sampled every 3 m along the path and across the zone: on the line of sight and at ±half and ±all of the lidar width, a fraction of r1 (default 0.6, the 60% zone; 0 checks the line of sight only). Something beside the line of sight counts by its distance from the zone's axis. Where no lidar covers the path, the fixed tree height is used instead and the report says what share of the path had lidar. Lidar is drawn in blue, fixed-height trees in green. Long paths are sampled more coarsely (at most 25,000 points), except in the close-up windows next to each site, which keep the full 3 m spacing and are drawn at that detail in the close-up profiles; and lidar that doesn't arrive within the time budget falls back to the fixed height with a warning.
 
-The report says when the lidar along the path was flown ("Lidar was flown in 2017", or "Lidar was flown between 2007 and 2018" when it comes from datasets of different years), in the result and in the notes under it, and which dataset the worst point came from; it warns when that is more than 10 years old, since trees may have grown since. The API's JSON also lists every dataset with its year and share of the path. The names and years come from the image service's catalog and are kept in the cache folder (`datasets/`).
+The report says when the lidar along the path was flown ("Lidar was flown in 2017", or "Lidar was flown between 2007 and 2018" when it comes from datasets of different years), in the result and in the notes under it, and which dataset the worst point came from; it warns when that is more than 10 years old, since trees may have grown since. The API's JSON also lists every dataset with its year and share of the path. The names and years come from the image service's catalog and are kept in the cache folder (`datasets/`). In the browser that folder lives in the same IndexedDB cache as the elevation samples, and the catalog lookups run one at a time.
 
 The default lidar source is the Oregon DOGAMI highest-hit surface (3 ft cells, all of Oregon that's been flown, plus some of the Washington side of the Columbia). Other public ArcGIS image services can be added in the `surface` section of the server config; see [deploy/config.example.json](deploy/config.example.json). Washington DNR's lidar services need a login, so they aren't included. When Trees or LIDAR is chosen, the terrain check runs even in "auto" mode.
 
@@ -204,7 +217,7 @@ kml_text = build_kml(a, b, Options())
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest requests pyproj
-.venv/bin/python -m pytest
+make test                            # uses .venv/bin/python when that directory exists
 ```
 
 The tests never touch the network (elevation sources are mocked or use synthetic tiles), and run with both the pyproj and the spherical geodesy.

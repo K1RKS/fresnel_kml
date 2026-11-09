@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Local development server: serves web/ and routes /api/fresnel.cgi to the API handler."""
+"""Local development server: serves web/, the fresnelkml package, and the optional CGI API."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import mimetypes
 import os
 import sys
@@ -11,13 +12,43 @@ from wsgiref.simple_server import make_server
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(ROOT, "web")
+PKG = os.path.join(ROOT, "fresnelkml")
 sys.path.insert(0, ROOT)
 
 from fresnelkml.webapi import MAX_BODY, handle_request  # noqa: E402
 
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("text/javascript", ".mjs")
+
+
+def _bytes(start_response, status, data, content_type):
+    start_response(status, [("Content-Type", content_type), ("Content-Length", str(len(data)))])
+    return [data]
+
+
+def package_response(path):
+    """The worker loads the package from /lib/fresnelkml/. The dev tree keeps it outside web/."""
+    if path == "/lib/fresnelkml.json":
+        names = sorted(name for name in os.listdir(PKG) if name.endswith(".py"))
+        return json.dumps(names).encode("utf-8"), "application/json"
+    prefix = "/lib/fresnelkml/"
+    if not path.startswith(prefix):
+        return None
+    name = path[len(prefix):]
+    if "/" in name or not name.endswith(".py"):
+        return None
+    full = os.path.join(PKG, name)
+    if not os.path.isfile(full):
+        return None
+    with open(full, "rb") as fh:
+        return fh.read(), "text/plain; charset=utf-8"
+
 
 def app(environ, start_response):
     path = environ.get("PATH_INFO", "/")
+    packaged = package_response(path)
+    if packaged is not None:
+        return _bytes(start_response, "200 OK", packaged[0], packaged[1])
     if path.endswith("/api/fresnel.cgi"):
         try:
             length = int(environ.get("CONTENT_LENGTH") or 0)

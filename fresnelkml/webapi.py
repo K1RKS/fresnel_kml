@@ -18,10 +18,11 @@ from .config import ConfigError, build_chain, load_config
 from .coords import LAT, LON, CoordinateError, format_position, parse_coordinate, parse_position
 from .elevation import ElevationUnavailable
 from .kml import render_kml
-from .nodes import load_nodes
+from .nodes import load_nodes, slim_feed
 from .parsing import RequestError, parse_request, resolve_position
 
 MAX_BODY = 16 * 1024
+NODES_MAX_BODY = 32 * 1024 * 1024
 KML_TYPE = "application/vnd.google-earth.kml+xml; charset=utf-8"
 JSON_TYPE = "application/json; charset=utf-8"
 NDJSON_TYPE = "application/x-ndjson; charset=utf-8"  # not in gzip_types, so NGINX passes lines straight on
@@ -40,6 +41,7 @@ USAGE = {
         "GET ?sources": "list the configured elevation sources",
         "GET ?map": "list the configured map tile servers",
         "GET ?nodes": "list mesh nodes from the configured Nodographer feeds",
+        "POST ?nodes[=FILENAME]": "slim a Nodographer nodes.json sent as the request body",
         "GET ?parse=TEXT[&axis=lat|lon]": "decode a coordinate or position to decimal degrees",
         "GET ?ground&lat=LAT&lon=LON (or &position=TEXT)[&source=NAME]": "look up the ground elevation at one point",
     },
@@ -186,6 +188,77 @@ def _progress_stream(req, cfg, env) -> Iterator[bytes]:
         yield _line(item)
 
 
+def run_progress(body: bytes, env, progress) -> dict:
+    """Run one progress request on this thread.
+
+    The CGI path streams from a background thread (`_progress_stream`). Pyodide does not run
+    those threads, so the browser worker calls this instead and forwards each
+    `progress(stage, done, total)` itself. The return value is the same object the stream
+    would send last: {"result": ...} or {"error", "field", "status"}.
+    """
+    if len(body) > MAX_BODY:
+        resp = _error(413, f"Request body is larger than {MAX_BODY // 1024} KB.")
+        return {**json.loads(resp.body), "status": resp.status}
+    try:
+        data = json.loads(body.decode("utf-8") or "null")
+    except (UnicodeDecodeError, ValueError):
+        resp = _error(400, "Request body is not valid JSON.")
+        return {**json.loads(resp.body), "status": resp.status}
+    try:
+        req = parse_request(data)
+    except RequestError as exc:
+        resp = _error(400, str(exc), exc.field)
+        return {**json.loads(resp.body), "status": resp.status}
+    try:
+        cfg = load_config(env=env)
+    except ConfigError as exc:
+        resp = _error(500, f"Server configuration error: {exc}")
+        return {**json.loads(resp.body), "status": resp.status}
+    progress("start", None, None)
+    try:
+        report = analyze(req.site_a, req.site_b, req.options, config=cfg, env=env, progress=progress)
+        progress("report", None, None)
+        return {"result": {"kml": render_kml(report), "report": report.to_dict(),
+                           "warnings": req.warnings + report.warnings}}
+    except Exception as exc:  # noqa: BLE001 - every failure becomes an error object
+        resp = _failure(exc)
+        return {**json.loads(resp.body), "status": resp.status}
+
+
+def _feed_name(params: dict) -> str:
+    raw = (params.get("nodes") or [""])[0].strip().replace("\\", "/").rsplit("/", 1)[-1]
+    raw = re.sub(r"[\x00-\x1f\x7f]", "", raw)
+    return raw[:80] or "nodes.json"
+
+
+def _post_nodes(body: bytes, params: dict) -> Response:
+    """Slim a Nodographer nodes.json the caller uploaded. Nothing is fetched or stored."""
+    name = _feed_name(params)
+    if len(body) > NODES_MAX_BODY:
+        return _error(413, f"{name} is larger than {NODES_MAX_BODY // (1024 * 1024)} MB.", "nodes")
+    try:
+        data = json.loads(body.decode("utf-8") or "null")
+    except (UnicodeDecodeError, ValueError):
+        return _error(400, f"{name} is not valid JSON.", "nodes")
+    try:
+        nodes, generated = slim_feed(data)
+    except ValueError as exc:
+        return _error(400, f"{name}: {exc}", "nodes")
+    kept: list[dict] = []
+    seen: set[str] = set()
+    for node in nodes:
+        if node["id"] in seen:
+            continue
+        seen.add(node["id"])
+        kept.append(node)
+    kept.sort(key=lambda n: n["name"].lower())
+    warnings = [f"{name}: no nodes with a usable position."] if not kept else []
+    payload = {"feeds": [{"name": name, "generated": generated, "count": len(kept), "age_s": 0}],
+               "nodes": kept, "warnings": warnings}
+    body_out = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return Response(200, body_out, [("Content-Type", JSON_TYPE), ("Cache-Control", "no-store")])
+
+
 def _post(body: bytes, env) -> Response:
     if len(body) > MAX_BODY:
         return _error(413, f"Request body is larger than {MAX_BODY // 1024} KB.")
@@ -228,6 +301,9 @@ def handle_request(method: str, query: str = "", body: bytes = b"", env=None) ->
         if method in ("GET", "HEAD"):
             return _get(query or "", env)
         if method == "POST":
+            params = urllib.parse.parse_qs(query or "", keep_blank_values=True)
+            if "nodes" in params:
+                return _post_nodes(body or b"", params)
             return _post(body or b"", env)
         resp = _error(405, "Use POST (or GET for usage).")
         resp.headers.append(("Allow", "GET, POST"))

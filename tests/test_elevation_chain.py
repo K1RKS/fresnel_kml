@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -15,6 +16,18 @@ def test_missing_config_gives_internet_default(tmp_path, monkeypatch):
     assert [s["name"] for s in cfg.chain] == ["3dep", "opentopodata", "open-elevation"]
     assert cfg.chain[0]["url"] == DEFAULT_CONFIG["elevation"]["chain"][0]["url"]
     assert [s["name"] for s in cfg.surface.sources] == ["dogami"]
+
+
+def test_browser_config_is_cors_friendly():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "config.json")
+    cfg = parse_config(json.load(open(path, encoding="utf-8")))
+    assert [s["name"] for s in cfg.chain] == ["3dep", "opentopodata", "open-meteo", "open-elevation"]
+    assert cfg.chain[1]["retries"] == 0 and cfg.chain[1]["min_interval_s"] == 0
+    assert all(s["type"] != "local_hgt" for s in cfg.chain)
+    assert cfg.surface.threads == 1 and cfg.cache.dir == "/cache"
+    assert cfg.tile_servers and all("cache_mb" not in s for s in cfg.tile_servers)
+    meteo = build_chain(cfg).only("open-meteo").providers[0]
+    assert meteo.type == "open-meteo"
 
 
 def test_explicit_missing_config_is_an_error(tmp_path):

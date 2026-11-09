@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 dist/
+web/pyodide/
 *.egg-info/
 *.kml
 !tests/data/*.kml

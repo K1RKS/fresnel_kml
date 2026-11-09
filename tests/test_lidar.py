@@ -199,6 +199,19 @@ def test_api_progress_stream(local_config, tmp_path):
     assert bad.status == 400 and bad.stream is None
 
 
+def test_emscripten_samples_without_threads(monkeypatch):
+    monkeypatch.setattr("fresnelkml.arcgis.sys.platform", "emscripten")
+
+    def explode(*args, **kwargs):
+        raise AssertionError("Pyodide must not start a thread")
+
+    monkeypatch.setattr("fresnelkml.arcgis.threading.Thread", explode)
+    monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: [1.0] * len(pts)))
+    res = ImageService("https://example.test/ImageServer", chunk=10).sample(
+        [(0.0, i * 0.001) for i in range(25)], threads=4)
+    assert res.values == [1.0] * 25 and res.failed == 0
+
+
 def test_sample_failures_and_deadline(monkeypatch):
     svc = ImageService("https://example.test/ImageServer", chunk=10)
     monkeypatch.setattr(httpjson, "post_form_json", fake_post(lambda pts: {"error": {"code": 500}}))

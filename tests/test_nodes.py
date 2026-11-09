@@ -184,4 +184,35 @@ def test_api_nodes_feed_down(tmp_path, monkeypatch):
 
 
 def test_usage_lists_nodes():
-    assert "GET ?nodes" in json.loads(handle_request("GET", "", env={}).body)["endpoints"]
+    endpoints = json.loads(handle_request("GET", "", env={}).body)["endpoints"]
+    assert "GET ?nodes" in endpoints
+    assert any(key.startswith("POST ?nodes") for key in endpoints)
+
+
+def test_api_post_nodes_file():
+    body = json.dumps(feed(TOWER, PARRETT, {**TOWER, "node": "Again"})).encode()
+    resp = handle_request("POST", "nodes=feeds/K1RKS.json", body)
+    assert resp.status == 200
+    assert dict(resp.headers)["Cache-Control"] == "no-store"
+    data = json.loads(resp.body)
+    assert data["feeds"] == [{"name": "K1RKS.json", "generated": 1762230000000, "count": 2, "age_s": 0}]
+    assert [n["id"] for n in data["nodes"]] == ["k1rks-tower", "parrett-sector"]
+    assert data["warnings"] == []
+
+
+def test_api_post_nodes_rejects_other_json():
+    resp = handle_request("POST", "nodes=notes.json", b'{"hello": 1}')
+    assert resp.status == 400 and "nodeInfo" in json.loads(resp.body)["error"]
+
+
+def test_api_post_nodes_empty_feed_warns():
+    resp = handle_request("POST", "nodes", json.dumps(feed()).encode())
+    data = json.loads(resp.body)
+    assert resp.status == 200 and data["nodes"] == []
+    assert data["warnings"] == ["nodes.json: no nodes with a usable position."]
+
+
+def test_api_post_nodes_rejects_oversize(monkeypatch):
+    monkeypatch.setattr("fresnelkml.webapi.NODES_MAX_BODY", 8)
+    resp = handle_request("POST", "nodes=big.json", b'{"nodeInfo":[]}')
+    assert resp.status == 413

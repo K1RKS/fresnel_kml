@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gzip
 import math
-import mmap
 import os
 import struct
 
@@ -33,7 +32,11 @@ class _Tile:
         else:
             self._fh = open(path, "rb")
             size = os.fstat(self._fh.fileno()).st_size
-            self.data = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ) if size else b""
+            if not size:
+                self.data = b""
+            else:
+                import mmap  # not part of Pyodide's default runtime; only the CLI reads raw tiles
+                self.data = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
         samples = len(self.data) // 2
         n = math.isqrt(samples)
         if n < 2 or n * n * 2 != len(self.data):
@@ -45,7 +48,7 @@ class _Tile:
 
     def close(self) -> None:
         if self._fh is not None:
-            if isinstance(self.data, mmap.mmap):
+            if hasattr(self.data, "close"):
                 self.data.close()
             self._fh.close()
 

@@ -17,6 +17,16 @@ TRIM_TO = 0.9  # an over-full cache is trimmed to this share of its limit
 _SCALE = 1_000_000  # 1e-6 degree steps, about 0.1 m
 _LON_SPAN = 400_000_000  # more than 360e6, so lat and lon steps never overlap in the packed key
 
+_live: list["PointCache"] = []
+
+
+def close_open_caches() -> None:
+    """Close every cache this process has opened. The browser worker does this before syncing
+    the virtual filesystem out to IndexedDB, so SQLite has finished writing the file."""
+    for cache in list(_live):
+        cache.close()
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS p (k INTEGER PRIMARY KEY, v REAL NOT NULL, s INTEGER NOT NULL, t INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS p_t ON p(t);
@@ -65,12 +75,19 @@ class PointCache:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             db = sqlite3.connect(self.path, timeout=5, isolation_level=None, check_same_thread=False)
             db.execute("PRAGMA auto_vacuum=INCREMENTAL")  # only takes effect on a new, empty file
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=NORMAL")
+            # WAL plus IndexedDB sync loses the -wal file's pages. The browser uses a rollback journal.
+            if sys.platform == "emscripten":
+                db.execute("PRAGMA journal_mode=DELETE")
+                db.execute("PRAGMA synchronous=FULL")
+            else:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=NORMAL")
+                db.execute("PRAGMA mmap_size=268435456")
             db.execute("PRAGMA busy_timeout=5000")
-            db.execute("PRAGMA mmap_size=268435456")
             db.executescript(_SCHEMA)
             self._db = db
+            if self not in _live:
+                _live.append(self)
         return self._db
 
     def _fail(self, exc: Exception) -> None:
@@ -173,7 +190,8 @@ class PointCache:
             removed += n
         if removed:
             db.execute("PRAGMA incremental_vacuum").fetchall()  # it frees pages one result row at a time
-            db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            if sys.platform != "emscripten":
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
         return removed
 
     def stats(self) -> dict:
@@ -194,6 +212,8 @@ class PointCache:
         db.execute("VACUUM")
 
     def close(self) -> None:
+        if self in _live:
+            _live.remove(self)
         if self._db is not None:
             try:
                 self._db.close()

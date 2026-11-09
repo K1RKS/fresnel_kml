@@ -7,6 +7,9 @@
 let meshNodes = [];
 const nodeById = new Map();
 let nodeWarnings = [];
+let remoteNodes = [];
+let remoteWarnings = [];
+let fileNodes = [];
 const MAX_MATCHES = 20;
 const SITE_KEYS = ["site_a", "site_b"];
 const STORE_KEY = "fresnelkml.sites";
@@ -264,12 +267,12 @@ async function fetchGround(q) {
   groundCache.set(q, { pending: true });
   SITE_KEYS.forEach(showGround);
   try {
-    const resp = await fetch(`${API}?${q}`);
+    const resp = await apiFetch(`${API}?${q}`);
     const data = await resp.json();
     if (resp.ok) groundCache.set(q, data);
     else groundCache.set(q, { error: resp.status === 400 ? "check the position" : data.error, retry: resp.status !== 400 });
   } catch (err) {
-    groundCache.set(q, { error: "the server couldn't be reached", retry: true });
+    groundCache.set(q, { error: "the lookup couldn't be made", retry: true });
   }
   SITE_KEYS.forEach(showGround);
 }
@@ -820,16 +823,81 @@ function finishRestore() {
   save();
 }
 
+// The chosen file wins when the same id is also in a remote feed.
+function publishNodes() {
+  const seen = new Set();
+  meshNodes = [];
+  nodeById.clear();
+  for (const node of fileNodes.concat(remoteNodes)) {
+    if (seen.has(node.id)) continue;
+    seen.add(node.id);
+    nodeById.set(node.id, node);
+    meshNodes.push(node);
+  }
+  meshNodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+}
+
+function rebindPicks() {
+  if (!stateReady) return;
+  for (const key of SITE_KEYS) {
+    const s = siteState.sites[key];
+    const live = s.node && nodeById.get(s.node);
+    if (!live) continue;
+    s.snap = live;
+    delete missingNotes[key];
+    applySite(key);
+  }
+  keepLinkedB();
+  applyFreq();
+  renderMode();
+  fillLinkOptions();
+  updateLookupHint();
+  save();
+}
+
 async function loadNodes() {
   try {
-    const resp = await fetch(`${API}?nodes`);
+    const resp = await apiFetch(`${API}?nodes`);
     if (!resp.ok) return;
     const data = await resp.json();
-    meshNodes = data.nodes || [];
-    meshNodes.forEach((n) => nodeById.set(n.id, n));
-    nodeWarnings = data.warnings || [];
+    remoteNodes = data.nodes || [];
+    remoteWarnings = data.warnings || [];
+    nodeWarnings = remoteWarnings;
+    publishNodes();
   } catch (err) {
     /* no feeds: the pickers and tabs stay hidden */
+  }
+}
+
+async function loadNodesFile(file) {
+  const status = $("#nodes-file-status");
+  status.classList.remove("bad");
+  status.textContent = `Reading ${file.name}\u2026`;
+  let text;
+  try {
+    text = await file.text();
+  } catch (err) {
+    status.textContent = `Could not read ${file.name}.`;
+    status.classList.add("bad");
+    return;
+  }
+  try {
+    const resp = await apiFetch(`${API}?nodes=${encodeURIComponent(file.name)}`, { method: "POST", body: text });
+    const data = await resp.json();
+    if (!resp.ok || !data || !Array.isArray(data.nodes)) {
+      status.textContent = (data && data.error) || `Could not read ${file.name}.`;
+      status.classList.add("bad");
+      return;
+    }
+    fileNodes = data.nodes;
+    nodeWarnings = remoteWarnings.concat(data.warnings || []);
+    publishNodes();
+    rebindPicks();
+    const count = fileNodes.length.toLocaleString();
+    status.textContent = `Loaded ${count} node${fileNodes.length === 1 ? "" : "s"} from ${file.name}.`;
+  } catch (err) {
+    status.textContent = err.message || `Could not read ${file.name}.`;
+    status.classList.add("bad");
   }
 }
 
@@ -849,6 +917,11 @@ function initSites() {
   for (const type of ["contextmenu", "mouseenter", "focus", "pointerdown"]) {
     $("#copy-link").addEventListener(type, () => { if (stateReady) refreshLink(); });
   }
+  $("#nodes-file").addEventListener("change", (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (file) loadNodesFile(file);
+  });
   $("#elev_source").addEventListener("change", () => SITE_KEYS.forEach(scheduleGround));
   $$("input[name=tree_mode]").forEach((r) => r.addEventListener("change", save));
   for (const id of Object.values(TREE_FIELDS)) $(`#${id}`).addEventListener("input", save);
