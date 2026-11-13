@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import urllib.error
 import urllib.parse
@@ -32,6 +33,38 @@ def get_json(url: str, params: dict | None = None, timeout: float = 10.0):
     if params:
         full += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, safe=",|")
     return _urllib_json(url, urllib.request.Request(full, headers={"User-Agent": USER_AGENT}), timeout)
+
+
+def get_json_conditional(url: str, etag: str | None = None, timeout: float = 10.0) -> tuple[object | None, str | None]:
+    """GET url as gzip, revalidating with etag. Returns (body, etag); body is None when the server says 304."""
+    headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+    if etag:
+        headers["If-None-Match"] = etag
+    if _requests is not None:
+        try:
+            resp = _requests.get(url, timeout=timeout, headers=headers)
+        except _requests.RequestException as exc:
+            raise HttpError(f"{url}: {exc}") from exc
+        if resp.status_code == 304:
+            return None, resp.headers.get("ETag") or etag
+        return _requests_json(url, resp), resp.headers.get("ETag")
+
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as resp:
+            body = resp.read()
+            new_etag = resp.headers.get("ETag")
+            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                body = gzip.decompress(body)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304:
+            return None, exc.headers.get("ETag") or etag
+        raise HttpError(f"{url}: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, OSError, EOFError) as exc:
+        raise HttpError(f"{url}: {exc}") from exc
+    try:
+        return json.loads(body), new_etag
+    except ValueError as exc:
+        raise HttpError(f"{url}: response is not JSON") from exc
 
 
 def post_form_json(url: str, form: dict, timeout: float = 10.0):

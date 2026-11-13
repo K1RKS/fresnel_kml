@@ -12,6 +12,7 @@ from fresnelkml.elevation import ElevationChain, ElevationProvider  # noqa: E402
 
 TILE_N = 1201
 REAL_GET_JSON = httpjson.get_json
+REAL_GET_JSON_CONDITIONAL = httpjson.get_json_conditional
 
 
 class FakeProvider(ElevationProvider):
@@ -51,6 +52,7 @@ def no_network_or_sleep(monkeypatch):
         raise AssertionError(f"unexpected network call: {args}")
 
     monkeypatch.setattr(httpjson, "get_json", blocked)
+    monkeypatch.setattr(httpjson, "get_json_conditional", blocked)
     monkeypatch.setattr(httpjson, "post_form_json", blocked)
     # a real /var/cache/fresnelkml on the test machine must never be used
     monkeypatch.setattr("fresnelkml.cache.DEFAULT_DIR", "/nonexistent/fresnelkml-cache")

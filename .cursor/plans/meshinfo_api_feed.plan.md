@@ -4,28 +4,28 @@ overview: Fresnel's server reads Nodographer's meshinfo API directly and is the 
 todos:
   - id: config
     content: "config.py: feeds become {name, base}; 'url' is an error that says it was replaced; cache_ttl_s default 60; new stale_after_s (default 3600)"
-    status: pending
+    status: completed
   - id: httpjson
     content: "httpjson.py: get_json_conditional(url, etag, timeout) -> (doc | None on 304, etag); always send Accept-Encoding: gzip; urllib path decompresses and treats 304 as not-modified"
-    status: pending
+    status: completed
   - id: nodes
     content: "nodes.py: fetch <base>nodes.json conditionally; require the meshinfo shape (generator Nodographer, id, antenna block) and drop old-feed tolerance; keep RF links with noise and far-end lat/lon; cache stores etag and generated"
-    status: pending
+    status: completed
   - id: staleness
     content: "nodes.py: warn when the feed's date is older than stale_after_s; then read <base>status.json (best effort) and add the scan state and lastError"
-    status: pending
+    status: completed
   - id: nodes-etag
-    content: "webapi.py: ?nodes sends an ETag built from the feeds' ETags and the warnings; If-None-Match from the CGI environment returns 304"
-    status: pending
+    content: "webapi.py: ?nodes sends an ETag hashed from the nodes, warnings and feed scan times; If-None-Match from the CGI environment (strong or NGINX's weak form) returns 304"
+    status: completed
   - id: page
     content: "sites.js: SNR in the link list; a link target with lat/lon but no node can be Site B; picker rows show 'last seen N days ago' for nodes not seen in 7 days"
-    status: pending
+    status: completed
   - id: tests
     content: "Rewrite tests/test_nodes.py (meshinfo shape, conditional GET, 304 keeps cache, staleness and status.json); test_httpjson for gzip and 304; test_api for the ?nodes ETag and 304; config errors for 'url'"
-    status: pending
+    status: completed
   - id: docs
     content: "README, deploy/INSTALL.md, deploy/config.example.json: nodes.feeds[].base pointing at the meshinfo API, the persistent cache folder, stale_after_s"
-    status: pending
+    status: completed
   - id: deploy
     content: "Check internal-nginx reaches the meshinfo API; change the server configs from url to base and set cache.dir; deploy to fresnel_kml_test per the deploy rule; main after testing"
     status: pending
@@ -79,19 +79,19 @@ Today `nodes.py` downloads the full `nodes.json` (548 KB, not gzipped by the pub
   - A failure keeps today's stale-cache fallback and warning. The last good data is served however old it is.
 - **Parsing:** `slim_feed`/`slim_node` require the meshinfo shape and drop the old-feed tolerance.
   - The document must have `generator == "Nodographer"` and a `nodeInfo` list. Otherwise `ValueError("not a Nodographer meshinfo nodes.json")`, which becomes a feed warning.
-  - **Per node:** `id`, `node` and finite `lat`/`lon` are required; nodes without them are skipped. `antenna` must be a dict. Flatten it into the page fields `height_m`, `azimuth_deg`, `elevation_deg`, `gain_dbi`, `beamwidth_deg` and `antenna`, so `sites.js` names don't change. Also copy `freq_mhz` (from `meshrf.freq`), `chanbw_mhz` (from `meshrf.chanbw` via `_num`), `band` and `last_seen`.
+  - **Per node:** `id`, `node` and finite `lat`/`lon` are required; nodes without them are skipped. A missing `antenna` block leaves the antenna fields null. Flatten it into the page fields `height_m`, `azimuth_deg`, `elevation_deg`, `gain_dbi`, `beamwidth_deg` and `antenna`, so `sites.js` names don't change. Also copy `freq_mhz` (from `meshrf.freq`), `chanbw_mhz` (from `meshrf.chanbw` via `_num`), `band` and `last_seen`.
   - **Per RF link:** `id`, `name`, `type`, `distance_km`, `bearing_deg`, `signal_dbm`, plus `noise_dbm`, and `lat`/`lon` when Nodographer sends them.
   - Remove the `.local.mesh` stripping, the `"None"`/`"Not Available"` blanks and the `id` fallback. `_num` stays, as a guard against bad values.
 - **Staleness:**
   - When `now - date > stale_after_s`, warn "K1RKS MeshMap: mesh data is 3 h old."
   - Only then, read `<base>status.json` once, at the cache TTL, best effort with a short timeout; any error adds nothing.
   - If `state` is `failed`, or `lastError` is set, append "; the last scan failed: <lastError>". If `state` is `scanning`, append "; a scan is in progress".
-- **Response:** `feeds[]` entries gain `etag`, used only by the `?nodes` ETag below. Merging and sorting are unchanged.
+- **Response:** unchanged shape. Merging and sorting are unchanged.
 
 ## `?nodes` revalidation (`fresnelkml/webapi.py`)
 
-- **ETag:** the first 16 hex characters of the sha1 of the feeds' `(name, etag)` pairs plus the warnings, quoted. When there are no feeds, or a feed has no ETag, send none.
-- **304:** `_get` reads `HTTP_IF_NONE_MATCH` from `env` (the CGI environment). On a match it returns `Response(304, b"", [ETag, Cache-Control])`. Add 304 to `Response.reason`.
+- **ETag:** the first 16 hex characters of the sha1 of the nodes, the warnings and each feed's `(name, generated, count)`, quoted. `age_s` is left out because it changes every second. Hashing the content rather than combining upstream ETags also works for feeds whose server sends no ETag.
+- **304:** `_nodes` reads `HTTP_IF_NONE_MATCH` from `env` (the CGI environment). NGINX turns the ETag weak (`W/"..."`) when it gzips, so the `W/` prefix is ignored; `*` and lists match too. On a match it returns `Response(304, b"", [Cache-Control, ETag])`. 304 is added to `Response.reason`.
 - Keep `Cache-Control: max-age=60`. After a minute the browser revalidates and usually gets an empty 304, instead of the full list (about 100 KB, gzipped by NGINX).
 
 ## Page (`web/sites.js`)

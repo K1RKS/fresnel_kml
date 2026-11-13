@@ -48,14 +48,16 @@ curl -X POST -H 'Content-Type: application/json' -d @req.json https://HOST/site/
 - **Progress** (what the web page uses): add `"progress": true` (with `"format": "json"`) and the response is `application/x-ndjson`, one JSON object per line as the work happens: `{"progress": {"stage", "done", "total"}}` for the stages `start`, `ground`, `lidar` (samples done of total) and `report`, then `{"result": {"kml", "report", "warnings"}}` or `{"error", "field", "status"}`. The response carries `X-Accel-Buffering: no` so NGINX passes each line straight through; fcgiwrap also needs `fastcgi_param NO_BUFFERING 1;` in the API's `location` (see [deploy/nginx-fresnel.conf](deploy/nginx-fresnel.conf)), or it holds the lines back until the result.
 - `GET ?sources` lists the configured elevation sources and lidar surface sources (`surface`); `GET ?parse=TEXT[&axis=lat|lon]` decodes a coordinate.
 - `GET ?ground&lat=LAT&lon=LON` (or `&position=TEXT`, plus an optional `&source=NAME`) looks up the ground elevation at one point and returns `{"lat", "lon", "ground_m", "source", "assumed_zero"}`.
-- `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency (MHz) and RF links (tunnel and DTD links are left out). An unreachable feed is a warning, not an error.
+- `GET ?nodes` returns `{"feeds", "nodes", "warnings"}`: the mesh nodes from the configured Nodographer meshinfo feeds, with name, position, antenna height (metres above ground), azimuth, beamwidth, gain, frequency and channel width (MHz), when last seen, and RF links with signal, noise and, when known, the far end's position (tunnel and DTD links are left out). An unreachable feed or data older than `nodes.stale_after_s` is a warning, not an error. The response has an `ETag`, and `If-None-Match` gets a `304`.
 
 ### Mesh node picker
 
-When the server has a Nodographer feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`), two tabs appear above the sites:
+When the server has a Nodographer meshinfo feed configured (by default the [K1RKS MeshMap](https://meshmap.k1rks.me/meshmap/) `nodes.json`; normally your own meshinfo API), two tabs appear above the sites:
 
 - **Node selection:** each site gets a "Mesh node" box. As you type, matching nodes are listed with the match in bold, and the first name that starts with what you typed is completed in the box; Tab or Enter accepts it, and the arrow keys or the mouse pick another. Once one site is picked, the other site's list starts with that node's RF links, nearest first. You can still type a site by hand without picking a node.
-- **Link selection:** Site A must be a mesh node, and Site B is chosen from a "Link from" list of Site A's RF links (nearest first, with distance, bearing and signal). Choosing a link fills Site B and sets the frequency from Site A. A link to a node the feed has no location for is marked "(no location in the feed)"; choosing it fills Site B's name and the frequency, and you enter its position and antenna height.
+- **Link selection:** Site A must be a mesh node, and Site B is chosen from a "Link from" list of Site A's RF links (nearest first, with distance, bearing, signal and signal-to-noise ratio). Choosing a link fills Site B and sets the frequency from Site A. A link to a node that isn't in the feed is marked either "(not in the feed; position from the link)", when Site A's link data places it, or "(no location in the feed)". Choosing one fills Site B's name, the frequency and any position from the link, and you enter the rest, including the antenna height.
+
+In the Mesh node lists, a node Nodographer hasn't reached for a week or more shows "last seen N days ago"; it may be gone.
 
 A picked node fills the name, position, antenna height above ground and the link frequency. These are defaults: a field you change is highlighted in amber, its tooltip shows the node's value, and the site's note lists what you changed. Clearing a changed field puts the node's value back. Emptying the Mesh node box drops the pick and keeps the values as plain manual entry. Switching the height units converts picked heights, overrides included.
 
@@ -65,7 +67,7 @@ Under each site's heights, "Ground here (lookup)" shows what the elevation looku
 
 The page remembers the mode, the picks, your changes and the "Along the path" settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
-For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself and caches them for 5 minutes; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
+For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself, rechecks them every minute (an empty `304` while the poller hasn't published a new scan), and warns when the mesh data is more than an hour old; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
 ### Map
 

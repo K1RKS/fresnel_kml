@@ -1,4 +1,4 @@
-"""Mesh node lists from Nodographer nodes.json feeds, slimmed for the site picker and cached on disk."""
+"""Mesh node lists from Nodographer meshinfo (nodes.json, status.json), slimmed for the site picker and cached on disk."""
 
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ import time
 
 from . import httpjson
 
-_BLANK = ("", "None", "none", "Not Available")
+NODES_FILE = "nodes.json"
+STATUS_FILE = "status.json"
+STATUS_TIMEOUT_S = 5.0
 
 
 def _num(value) -> float | None:
-    if value is None or isinstance(value, bool) or value in _BLANK:
+    if value is None or isinstance(value, bool):
         return None
     try:
         f = float(value)
@@ -25,40 +27,40 @@ def _num(value) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def _short_host(name) -> str:
-    return re.sub(r"\.local\.mesh\.?$", "", str(name or "").strip(), flags=re.IGNORECASE)
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _position(data: dict) -> tuple[float, float] | tuple[None, None]:
+    lat, lon = _num(data.get("lat")), _num(data.get("lon"))
+    if lat is None or lon is None or (lat == 0 and lon == 0) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None, None
+    return lat, lon
 
 
 def _slim_link(link) -> dict | None:
     # Only RF links can be a Fresnel path; tunnels and DTD would bloat the list
-    if not isinstance(link, dict) or str(link.get("linkType") or "").upper() != "RF":
+    if not isinstance(link, dict) or link.get("linkType") != "RF" or not _text(link.get("id")):
         return None
-    host = _short_host(link.get("hostname"))
-    lid = str(link.get("id") or host.lower())
-    if not lid:
-        return None
-    return {"id": lid, "name": host or lid, "type": str(link.get("linkType") or ""), "distance_km": _num(link.get("distance_km")),
-            "bearing_deg": _num(link.get("bearing_deg")), "signal_dbm": _num(link.get("signal_dbm"))}
+    lat, lon = _position(link)
+    return {"id": link["id"], "name": _text(link.get("hostname")) or link["id"], "type": "RF",
+            "distance_km": _num(link.get("distance_km")), "bearing_deg": _num(link.get("bearing_deg")),
+            "signal_dbm": _num(link.get("signal_dbm")), "noise_dbm": _num(link.get("noise_dbm")),
+            "lat": lat, "lon": lon}
 
 
 def slim_node(data) -> dict | None:
-    """The picker fields of one nodeInfo[i]["data"], or None when it has no usable position."""
-    if not isinstance(data, dict):
+    """The picker fields of one nodeInfo[i]["data"], or None when it has no id, name or usable position."""
+    if not isinstance(data, dict) or not _text(data.get("id")) or not _text(data.get("node")):
         return None
-    lat, lon = _num(data.get("lat")), _num(data.get("lon"))
-    if lat is None or lon is None or (lat == 0 and lon == 0) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        return None
-    name = _short_host(data.get("node"))
-    if not name:
+    lat, lon = _position(data)
+    if lat is None:
         return None
     ant = data.get("antenna") if isinstance(data.get("antenna"), dict) else {}
     meshrf = data.get("meshrf") if isinstance(data.get("meshrf"), dict) else {}
-    freq = _num(meshrf.get("freq"))
-    desc = ant.get("description")
-    links = [l for l in (_slim_link(x) for x in data.get("links") or []) if l]
     return {
-        "id": str(data.get("id") or name.lower()),
-        "name": name,
+        "id": data["id"],
+        "name": data["node"],
         "lat": lat,
         "lon": lon,
         "height_m": _num(ant.get("height_m")),
@@ -66,17 +68,19 @@ def slim_node(data) -> dict | None:
         "elevation_deg": _num(ant.get("elevation_deg")),
         "gain_dbi": _num(ant.get("gain_dbi")),
         "beamwidth_deg": _num(ant.get("beamwidth_deg")),
-        "antenna": desc if isinstance(desc, str) and desc else None,
-        "freq_mhz": freq if freq else None,
+        "antenna": _text(ant.get("description")),
+        "freq_mhz": _num(meshrf.get("freq")) or None,
+        "chanbw_mhz": _num(meshrf.get("chanbw")) or None,
         "band": str(data.get("band") or ""),
-        "links": links,
+        "last_seen": _text(data.get("last_seen")),
+        "links": [l for l in (_slim_link(x) for x in data.get("links") or []) if l],
     }
 
 
 def slim_feed(doc) -> tuple[list[dict], int | None]:
-    """All usable nodes of a feed document and its generation time (ms), or ValueError if it isn't a feed."""
-    if not isinstance(doc, dict) or not isinstance(doc.get("nodeInfo"), list):
-        raise ValueError("response has no nodeInfo list")
+    """All usable nodes of a meshinfo nodes.json and its generation time (ms), or ValueError if it isn't one."""
+    if not isinstance(doc, dict) or doc.get("generator") != "Nodographer" or not isinstance(doc.get("nodeInfo"), list):
+        raise ValueError("not a Nodographer nodes.json")
     nodes = []
     for entry in doc["nodeInfo"]:
         node = slim_node(entry.get("data") if isinstance(entry, dict) else None)
@@ -114,13 +118,16 @@ def _write_cache(path: str, data: dict) -> None:
         pass  # a cache we can't write only costs a refetch next time
 
 
-def _ago(seconds: float) -> str:
+def _age(seconds: float) -> str:
     minutes = int(seconds // 60)
-    if minutes < 1:
-        return "under a minute ago"
     if minutes < 120:
-        return f"{minutes} min ago"
-    return f"{minutes // 60} h ago"
+        return f"{minutes} min"
+    hours = minutes // 60
+    return f"{hours} h" if hours < 48 else f"{hours // 24} days"
+
+
+def _ago(seconds: float) -> str:
+    return "under a minute ago" if seconds < 60 else f"{_age(seconds)} ago"
 
 
 def _reason(exc: Exception, url: str) -> str:
@@ -131,20 +138,52 @@ def _reason(exc: Exception, url: str) -> str:
     return (text[:97] + "...") if len(text) > 100 else (text or "unreachable")
 
 
+def _is_stale(data: dict, config, now: float) -> bool:
+    generated = data.get("generated")
+    return bool(config.nodes_stale_after_s and isinstance(generated, (int, float))
+                and now - generated / 1000 > config.nodes_stale_after_s)
+
+
+def _status_note(feed: dict, timeout: float) -> str:
+    """Why the poller's data is old, from meshinfo's status.json; empty when it can't be read (only the API has it)."""
+    try:
+        status, _ = httpjson.get_json_conditional(feed["base"] + STATUS_FILE, timeout=min(timeout, STATUS_TIMEOUT_S))
+    except httpjson.HttpError:
+        return ""
+    if not isinstance(status, dict):
+        return ""
+    error = _text(status.get("lastError"))
+    if error:
+        return f"; the last scan failed: {error[:200]}"
+    if status.get("state") == "failed":
+        return "; the last scan failed"
+    if status.get("state") == "scanning":
+        return "; a scan is in progress"
+    return ""
+
+
 def _load_feed(feed: dict, config, now: float) -> tuple[dict | None, str | None]:
-    path = _cache_path(config.cache_dir, feed["url"])
-    cached = _read_cache(path, feed["url"])
+    url = feed["base"] + NODES_FILE
+    path = _cache_path(config.cache_dir, url)
+    cached = _read_cache(path, url)
     if cached and 0 <= now - cached["fetched"] < config.nodes_cache_ttl_s:
         return cached, None
     timeout = config.nodes_timeout_s or config.timeout_s
     try:
-        nodes, generated = slim_feed(httpjson.get_json(feed["url"], timeout=timeout))
+        doc, etag = httpjson.get_json_conditional(url, cached.get("etag") if cached else None, timeout=timeout)
+        if doc is None:
+            if not cached:
+                raise httpjson.HttpError(f"{url}: 304 without a cached copy")
+            data = {**cached, "fetched": now, "etag": etag}
+        else:
+            nodes, generated = slim_feed(doc)
+            data = {"url": url, "fetched": now, "etag": etag, "generated": generated, "nodes": nodes}
     except (httpjson.HttpError, ValueError) as exc:
-        reason = _reason(exc, feed["url"])
+        reason = _reason(exc, url)
         if cached:
             return cached, f"{feed['name']}: feed unavailable ({reason}), showing data from {_ago(now - cached['fetched'])}."
         return None, f"{feed['name']}: feed unavailable ({reason})."
-    data = {"url": feed["url"], "fetched": now, "generated": generated, "nodes": nodes}
+    data["status_note"] = _status_note(feed, timeout) if _is_stale(data, config, now) else ""
     _write_cache(path, data)
     return data, None
 
@@ -160,6 +199,9 @@ def load_nodes(config, now=time.time) -> tuple[list[dict], list[dict], list[str]
             warnings.append(warning)
         if data is None:
             continue
+        if _is_stale(data, config, t):
+            warnings.append(f"{feed['name']}: mesh data is {_age(t - data['generated'] / 1000)} old"
+                            f"{data.get('status_note') or ''}.")
         count = 0
         for node in data["nodes"]:
             if node.get("id") in seen:

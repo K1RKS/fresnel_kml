@@ -1,3 +1,4 @@
+import gzip
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -6,7 +7,9 @@ import pytest
 
 import fresnelkml.httpjson as httpjson_module
 
-from conftest import REAL_GET_JSON
+from conftest import REAL_GET_JSON, REAL_GET_JSON_CONDITIONAL
+
+ETAG = '"snap1-nodes.json"'
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -15,9 +18,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(503)
             self.end_headers()
             return
-        body = json.dumps({"path": self.path}).encode()
+        if self.path.startswith("/snapshot") and self.headers.get("If-None-Match") == ETAG:
+            self.send_response(304)
+            self.send_header("ETag", ETAG)
+            self.end_headers()
+            return
+        body = json.dumps({"path": self.path, "accept_encoding": self.headers.get("Accept-Encoding")}).encode()
+        gzipped = self.path.startswith("/snapshot") and "gzip" in (self.headers.get("Accept-Encoding") or "")
+        if gzipped:
+            body = gzip.compress(body)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+        if self.path.startswith("/snapshot"):
+            self.send_header("ETag", ETAG)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -46,3 +61,16 @@ def test_get_json_both_transports(server, monkeypatch, use_requests):
                             "/v1/srtm30m?locations=37.000000%2C-122.000000%7C37.1%2C-122.1")
     with pytest.raises(httpjson_module.HttpError, match="503"):
         REAL_GET_JSON(f"{server}/fail")
+
+
+@pytest.mark.parametrize("use_requests", [False, True])
+def test_get_json_conditional(server, monkeypatch, use_requests):
+    if not use_requests:
+        monkeypatch.setattr(httpjson_module, "_requests", None)
+    elif httpjson_module._requests is None:
+        pytest.skip("requests not installed")
+    data, etag = REAL_GET_JSON_CONDITIONAL(f"{server}/snapshot/nodes.json")
+    assert data["path"] == "/snapshot/nodes.json" and "gzip" in data["accept_encoding"] and etag == ETAG
+    assert REAL_GET_JSON_CONDITIONAL(f"{server}/snapshot/nodes.json", etag) == (None, ETAG)
+    with pytest.raises(httpjson_module.HttpError, match="503"):
+        REAL_GET_JSON_CONDITIONAL(f"{server}/fail", etag)

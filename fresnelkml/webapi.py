@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import queue
 import re
 import sys
@@ -55,7 +57,7 @@ class Response:
 
     @property
     def reason(self) -> str:
-        return {200: "OK", 400: "Bad Request", 405: "Method Not Allowed", 413: "Payload Too Large",
+        return {200: "OK", 304: "Not Modified", 400: "Bad Request", 405: "Method Not Allowed", 413: "Payload Too Large",
                 500: "Internal Server Error", 502: "Bad Gateway", 504: "Gateway Timeout"}.get(self.status, "")
 
 
@@ -102,6 +104,25 @@ def _ground(params: dict, env) -> Response:
     return Response(200, body, [("Content-Type", JSON_TYPE), ("Cache-Control", "max-age=86400")])
 
 
+def _etag_matches(header: str, etag: str) -> bool:
+    # NGINX turns a strong ETag weak (W/"...") when it gzips the response
+    tags = [t.strip() for t in header.split(",")]
+    return "*" in tags or etag in (t[2:] if t.startswith("W/") else t for t in tags)
+
+
+def _nodes(cfg, env) -> Response:
+    nodes, feeds, warnings = load_nodes(cfg)
+    # age_s changes every second, so it stays out of the ETag
+    content = [nodes, warnings, [(f["name"], f["generated"], f["count"]) for f in feeds]]
+    etag = '"%s"' % hashlib.sha1(json.dumps(content, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    headers = [("Cache-Control", "max-age=60"), ("ETag", etag)]
+    if _etag_matches((os.environ if env is None else env).get("HTTP_IF_NONE_MATCH") or "", etag):
+        return Response(304, b"", headers)
+    body = json.dumps({"feeds": feeds, "nodes": nodes, "warnings": warnings}, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    return Response(200, body, [("Content-Type", JSON_TYPE)] + headers)
+
+
 def _get(query: str, env) -> Response:
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
     if "ground" in params:
@@ -112,10 +133,7 @@ def _get(query: str, env) -> Response:
         except ConfigError as exc:
             return _error(500, f"Server configuration error: {exc}")
         if "nodes" in params:
-            nodes, feeds, warnings = load_nodes(cfg)
-            body = json.dumps({"feeds": feeds, "nodes": nodes, "warnings": warnings}, ensure_ascii=False,
-                              separators=(",", ":")).encode("utf-8")
-            return Response(200, body, [("Content-Type", JSON_TYPE), ("Cache-Control", "max-age=60")])
+            return _nodes(cfg, env)
         if "map" in params:
             return _json(200, cfg.public_map())
         return _json(200, {"sources": [{"name": "auto", "type": "chain"}] + cfg.public_sources(),

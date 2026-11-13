@@ -8,6 +8,7 @@ let meshNodes = [];
 const nodeById = new Map();
 let nodeWarnings = [];
 const MAX_MATCHES = 20;
+const STALE_DAYS = 7;  // Nodographer keeps a node it can no longer reach for up to 30 days
 const SITE_KEYS = ["site_a", "site_b"];
 const STORE_KEY = "fresnelkml.sites";
 const TRACKED = ["name", "lat", "lon", "height_m", "height_ref", "ground_m"];
@@ -344,14 +345,25 @@ function pickSite(key, node) {
   save();
 }
 
-function unmappedNote(link) {
-  return `${link.name || link.id} has no location in the node feed; enter its latitude, longitude and antenna height.`;
+function linkPlaced(link) {
+  return link.lat !== null && link.lat !== undefined && link.lon !== null && link.lon !== undefined;
 }
 
-// A link to a node the feed has no location for: Site B gets its name and the link's frequency,
-// and the user enters the rest.
+function unmappedNote(link) {
+  const name = link.name || link.id;
+  return linkPlaced(link) ? `${name} isn't in the node feed; its position comes from the link data. Enter its antenna height.`
+    : `${name} has no location in the node feed; enter its latitude, longitude and antenna height.`;
+}
+
+// A link to a node the feed has no record for: Site B gets its name, the link's frequency and,
+// when the link data has it, its position; the user enters the rest.
 function pickUnmappedLink(link) {
-  siteState.sites.site_b = { node: null, snap: null, link: link.id, ov: { name: link.name || link.id, height_ref: "agl" } };
+  const ov = { name: link.name || link.id, height_ref: "agl" };
+  if (linkPlaced(link)) {
+    ov.lat = link.lat.toFixed(7);
+    ov.lon = link.lon.toFixed(7);
+  }
+  siteState.sites.site_b = { node: null, snap: null, link: link.id, ov };
   missingNotes.site_b = unmappedNote(link);
   siteState.freq_ov = null;
   $("#error").hidden = true;
@@ -407,7 +419,21 @@ function nodeExtra(node) {
   const parts = [];
   if (hasHeight(node)) parts.push(`Ht ${hfmt(node.height_m, 0, units)}`);
   if (node.freq_mhz) parts.push(`${node.freq_mhz} MHz`);
+  const days = lastSeenDays(node);
+  if (days >= STALE_DAYS) parts.push(`last seen ${days} days ago`);
   return parts.join(" \u00b7 ");
+}
+
+function lastSeenDays(node) {
+  const t = Date.parse(node.last_seen || "");
+  return Number.isNaN(t) ? 0 : Math.floor((Date.now() - t) / 86400000);
+}
+
+function linkSignal(link) {
+  if (link.signal_dbm === null || link.signal_dbm === undefined) return null;
+  const snr = link.noise_dbm === null || link.noise_dbm === undefined ? ""
+    : `, SNR ${(link.signal_dbm - link.noise_dbm).toFixed(0)} dB`;
+  return `${link.signal_dbm.toFixed(0)} dBm${snr}`;
 }
 
 function rfLinks(node) {
@@ -616,9 +642,9 @@ function fillLinkOptions() {
   const opts = [`<option value="">${links.length ? "Choose a link\u2026" : esc(`No RF links from ${a.name}`)}</option>`];
   for (const l of links) {
     const n = nodeById.get(l.id);
-    const parts = [linkWhere(l, units), l.signal_dbm !== null ? `${l.signal_dbm.toFixed(0)} dBm` : null].filter(Boolean);
+    const parts = [linkWhere(l, units), linkSignal(l)].filter(Boolean);
     const label = `${n ? n.name : l.name || l.id}${parts.length ? " \u2014 " + parts.join(", ") : ""}`
-      + (n ? "" : " (no location in the feed)");
+      + (n ? "" : linkPlaced(l) ? " (not in the feed; position from the link)" : " (no location in the feed)");
     opts.push(`<option value="${esc(l.id)}">${esc(label)}</option>`);
   }
   sel.innerHTML = opts.join("");

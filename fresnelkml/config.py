@@ -58,9 +58,10 @@ DEFAULT_CONFIG = {
     },
     "nodes": {
         "feeds": [
-            {"name": "K1RKS MeshMap", "url": "https://meshmap.k1rks.me/meshmap/data/nodes.json"},
+            {"name": "K1RKS MeshMap", "base": "https://meshmap.k1rks.me/meshmap/data/"},
         ],
-        "cache_ttl_s": 300,
+        "cache_ttl_s": 60,
+        "stale_after_s": 3600,
     },
     "surface": {
         "sources": [
@@ -117,6 +118,7 @@ class Config:
     default_tile_server: str | None = DEFAULT_CONFIG["map"]["default"]
     node_feeds: list[dict] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CONFIG["nodes"]["feeds"]))
     nodes_cache_ttl_s: float = DEFAULT_CONFIG["nodes"]["cache_ttl_s"]
+    nodes_stale_after_s: float = DEFAULT_CONFIG["nodes"]["stale_after_s"]
     nodes_timeout_s: float | None = None
     surface: SurfaceConfig = field(default_factory=lambda: _parse_surface(None))
 
@@ -217,14 +219,14 @@ def _parse_map(data) -> tuple[list[dict], str | None]:
     return servers, (default if servers else None)
 
 
-_NODES_KEYS = {"feeds", "cache_ttl_s", "timeout_s"}
-_FEED_KEYS = {"name", "url"}
+_NODES_KEYS = {"feeds", "cache_ttl_s", "stale_after_s", "timeout_s"}
+_FEED_KEYS = {"name", "base"}
 
 
-def _parse_nodes(data) -> tuple[list[dict], float, float | None]:
+def _parse_nodes(data) -> tuple[list[dict], float, float, float | None]:
     if data is None:
         default = DEFAULT_CONFIG["nodes"]
-        return copy.deepcopy(default["feeds"]), float(default["cache_ttl_s"]), None
+        return copy.deepcopy(default["feeds"]), float(default["cache_ttl_s"]), float(default["stale_after_s"]), None
     if not isinstance(data, dict):
         raise ConfigError("'nodes' must be an object")
     unknown = set(data) - _NODES_KEYS
@@ -238,25 +240,31 @@ def _parse_nodes(data) -> tuple[list[dict], float, float | None]:
         where = f"nodes.feeds[{i}]"
         if not isinstance(entry, dict):
             raise ConfigError(f"{where} must be an object")
+        if "url" in entry:
+            raise ConfigError(f"{where}.url was replaced by base: the meshinfo API (or folder) that holds "
+                              "Nodographer's nodes.json, for example http://meshinfo-host:8090/api/v1/")
         unknown = set(entry) - _FEED_KEYS
         if unknown:
             raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")
-        name, url = entry.get("name"), entry.get("url")
+        name, base = entry.get("name"), entry.get("base")
         if not isinstance(name, str) or not name:
             raise ConfigError(f"{where}.name must be a non-empty string")
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-            raise ConfigError(f"{where}.url must be an http(s) URL")
-        feeds.append({"name": name, "url": url})
+        if not isinstance(base, str) or not base.startswith(("http://", "https://")):
+            raise ConfigError(f"{where}.base must be an http(s) URL")
+        feeds.append({"name": name, "base": base if base.endswith("/") else base + "/"})
     names = [f["name"] for f in feeds]
     if len(set(names)) != len(names):
         raise ConfigError("node feed names must be unique")
-    ttl = data.get("cache_ttl_s", DEFAULT_CONFIG["nodes"]["cache_ttl_s"])
-    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or ttl < 0:
-        raise ConfigError("nodes.cache_ttl_s must be a non-negative number")
+    numbers = {}
+    for key in ("cache_ttl_s", "stale_after_s"):
+        value = data.get(key, DEFAULT_CONFIG["nodes"][key])
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"nodes.{key} must be a non-negative number")
+        numbers[key] = float(value)
     timeout = data.get("timeout_s")
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
         raise ConfigError("nodes.timeout_s must be a positive number")
-    return feeds, float(ttl), (float(timeout) if timeout is not None else None)
+    return feeds, numbers["cache_ttl_s"], numbers["stale_after_s"], (float(timeout) if timeout is not None else None)
 
 
 _CACHE_KEYS = {"dir", "max_mb", "types", "services"}
@@ -405,11 +413,12 @@ def parse_config(data: dict, path: str | None = None) -> Config:
     if cache_dir is not None and not isinstance(cache_dir, str):
         raise ConfigError("elevation.cache_dir must be a string or null")
     tile_servers, default_tiles = _parse_map(data.get("map"))
-    feeds, nodes_ttl, nodes_timeout = _parse_nodes(data.get("nodes"))
+    feeds, nodes_ttl, nodes_stale, nodes_timeout = _parse_nodes(data.get("nodes"))
     return Config(chain=chain, timeout_s=float(timeout), retries=retries,
                   cache=_parse_cache(data.get("cache"), cache_dir), path=path, tile_servers=tile_servers,
                   default_tile_server=default_tiles, node_feeds=feeds, nodes_cache_ttl_s=nodes_ttl,
-                  nodes_timeout_s=nodes_timeout, surface=_parse_surface(data.get("surface")))
+                  nodes_stale_after_s=nodes_stale, nodes_timeout_s=nodes_timeout,
+                  surface=_parse_surface(data.get("surface")))
 
 
 def load_config(path: str | None = None, env=None) -> Config:

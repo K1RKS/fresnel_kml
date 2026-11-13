@@ -47,8 +47,9 @@
   },
   "nodes": {
     "feeds": [
-      {"name": "K1RKS MeshMap", "url": "https://meshmap.k1rks.me/meshmap/data/nodes.json"}
+      {"name": "K1RKS MeshMap", "base": "https://meshmap.k1rks.me/meshmap/data/"}
     ],
-    "cache_ttl_s": 300
+    "cache_ttl_s": 60,
+    "stale_after_s": 3600
   }
 }
