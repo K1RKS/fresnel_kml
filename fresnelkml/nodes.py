@@ -91,8 +91,9 @@ def slim_feed(doc) -> tuple[list[dict], int | None]:
 
 
 def _cache_path(cache_dir: str | None, url: str) -> str:
+    # Not the fresnelkml-nodes-* name of older versions, which may share the cache folder and feed URL
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
-    return os.path.join(cache_dir or tempfile.gettempdir(), f"fresnelkml-nodes-{digest}.json")
+    return os.path.join(cache_dir or tempfile.gettempdir(), f"fresnelkml-meshinfo-nodes-{digest}.json")
 
 
 def _read_cache(path: str, url: str) -> dict | None:
@@ -110,7 +111,7 @@ def _read_cache(path: str, url: str) -> dict | None:
 
 def _write_cache(path: str, data: dict) -> None:
     try:
-        fd, tmp = tempfile.mkstemp(prefix=".fresnelkml-nodes-", dir=os.path.dirname(path))
+        fd, tmp = tempfile.mkstemp(prefix=".fresnelkml-meshinfo-nodes-", dir=os.path.dirname(path))
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, separators=(",", ":"))
         os.replace(tmp, path)

@@ -142,6 +142,17 @@ def test_conditional_refresh(tmp_path, monkeypatch):
     assert len(nodes) == 2
 
 
+def test_ignores_old_versions_cache(tmp_path, monkeypatch):
+    import hashlib
+    url = BASE + "nodes.json"
+    old = tmp_path / f"fresnelkml-nodes-{hashlib.sha1(url.encode()).hexdigest()[:12]}.json"
+    old.write_text(json.dumps({"url": url, "fetched": NOW_MS / 1000, "generated": NOW_MS, "nodes": []}))
+    server = Server({url: feed(TOWER)})
+    monkeypatch.setattr(httpjson, "get_json_conditional", server)
+    nodes, _, _ = load_nodes(config(tmp_path), now=lambda: NOW_MS / 1000 + 5)
+    assert server.calls == [(url, None)] and len(nodes) == 1 and nodes[0]["last_seen"]
+
+
 def test_stale_cache_fallback(tmp_path, monkeypatch):
     server = Server({BASE + "nodes.json": feed(TOWER)})
     monkeypatch.setattr(httpjson, "get_json_conditional", server)
@@ -275,7 +286,7 @@ def test_api_nodes_revalidates(tmp_path, monkeypatch):
     assert handle_request("GET", "nodes", env={**env, "HTTP_IF_NONE_MATCH": '"other"'}).status == 200
 
     # a new snapshot with different nodes changes the ETag
-    for f in tmp_path.glob("fresnelkml-nodes-*.json"):
+    for f in tmp_path.glob("fresnelkml-meshinfo-nodes-*.json"):
         f.unlink()
     server.etag = '"snap2-nodes.json"'
     server.docs[BASE + "nodes.json"] = feed(TOWER)
