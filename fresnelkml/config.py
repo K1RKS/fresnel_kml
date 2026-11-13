@@ -221,6 +221,7 @@ def _parse_map(data) -> tuple[list[dict], str | None]:
 
 _NODES_KEYS = {"feeds", "cache_ttl_s", "stale_after_s", "timeout_s"}
 _FEED_KEYS = {"name", "base"}
+NODES_FILE = "nodes.json"
 
 
 def _parse_nodes(data) -> tuple[list[dict], float, float, float | None]:
@@ -241,8 +242,12 @@ def _parse_nodes(data) -> tuple[list[dict], float, float, float | None]:
         if not isinstance(entry, dict):
             raise ConfigError(f"{where} must be an object")
         if "url" in entry:
-            raise ConfigError(f"{where}.url was replaced by base: the meshinfo API (or folder) that holds "
-                              "Nodographer's nodes.json, for example http://meshinfo-host:8090/api/v1/")
+            # Older configs named the nodes.json file itself; its folder is the base
+            url = entry.get("url")
+            if "base" in entry or not isinstance(url, str) or not url.endswith("/" + NODES_FILE):
+                raise ConfigError(f"{where}.url was replaced by base: the meshinfo API (or folder) that holds "
+                                  "Nodographer's nodes.json, for example http://meshinfo-host:8090/api/v1/")
+            entry = {**{k: v for k, v in entry.items() if k != "url"}, "base": url[:-len(NODES_FILE)]}
         unknown = set(entry) - _FEED_KEYS
         if unknown:
             raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")

@@ -135,7 +135,7 @@ The page's "Mesh node" picker fills Site A and Site B from [Nodographer](https:/
 }
 ```
 
-- `base` is the folder that holds meshinfo's snapshot files: the API (`http://host:8090/api/v1/`), or a Nodographer frontend's `meshinfo/`, `meshinfo/current/` or `data/` folder. The server reads `<base>nodes.json`. An old `url` entry is a configuration error that says what to change.
+- `base` is the folder that holds meshinfo's snapshot files: the API (`http://host:8090/api/v1/`), or a Nodographer frontend's `meshinfo/`, `meshinfo/current/` or `data/` folder. The server reads `<base>nodes.json`. An older config's `url` that names a `nodes.json` file still works, read as that file's folder; any other `url` is a configuration error that says what to change.
 - The server fetches the feeds itself and serves the result to the page, so users only ever reach this site. The meshinfo API only has to be reachable from this server, for example on the internal network or the mesh (`*.local.mesh`), and needs no CORS settings. Only the addresses in this file are ever fetched.
 - When the same node appears in more than one feed, the first feed in the list wins.
 - Each feed is rechecked after `cache_ttl_s` seconds (default 60). The recheck sends the last `ETag`, so while the poller hasn't published a new scan the answer is an empty `304`; a new scan is downloaded gzipped.

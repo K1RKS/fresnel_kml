@@ -57,7 +57,7 @@ Today `nodes.py` downloads the full `nodes.json` (548 KB, not gzipped by the pub
 - **`base`** is the folder that holds the snapshot files. Normally that's the meshinfo API (`http://host:8090/api/v1/` or `http://host.local.mesh:8090/api/v1/`). Nodographer's other layouts also work for `nodes.json`: a proxy path, local `meshinfo/current/`, or a legacy `data/` copy. Only the API has `status.json`.
   - It must be http(s); a missing trailing `/` is added.
   - The built-in default is the public copy `https://meshmap.k1rks.me/meshmap/data/`, so a fresh install still works. Real deployments set their own API base.
-- **`url`** (the old key) raises `ConfigError("nodes.feeds[0].url was replaced by base: the meshinfo API (or folder) that holds Nodographer's nodes.json")`.
+- **`url`** (the old key): a `url` ending in `/nodes.json` is read as its folder, so a config shared with a site still running the old code keeps working for both. Anything else, or `url` together with `base`, raises `ConfigError("nodes.feeds[0].url was replaced by base: the meshinfo API (or folder) that holds Nodographer's nodes.json …")`.
 - **`cache_ttl_s`** defaults to 60, which is cheap now that a refresh is usually a 304.
 - **`stale_after_s`** (new, non-negative; 0 turns the check off): how old a snapshot can be before a warning.
 
@@ -148,7 +148,7 @@ Today `nodes.py` downloads the full `nodes.json` (548 KB, not gzipped by the pub
 
 1. From `internal-nginx`: `curl -s http://<meshinfo-host>:8090/api/v1/status.json` returns JSON.
 2. In the config each site's CGI loads:
-   - change `nodes.feeds[].url` to `base` with the API address. A leftover `url` now fails config loading, and with it every API call.
+   - Both sites share `/etc/fresnelkml/config.json`, which has `"url": "http://172.27.15.20/meshmap/data/nodes.json"`. The new code reads it as `base` `http://172.27.15.20/meshmap/data/`, and the old code on `main` keeps working, so the test site can be deployed without touching it. Only switch it to `"base": "http://<meshinfo-host>:8090/api/v1/"` once `main` runs this code, because the old code rejects `base`. As of 2026-11-13, `172.27.15.20` serves only the legacy `data/` layout, and nothing answers on port 8090 from `internal-nginx`.
    - Make sure `cache.dir` is set and writable by `www-data`.
 3. Build and copy `origin/site_selection_update` to `fresnel_kml_test` exactly as `.cursor/rules/deploy.mdc` says (temporary worktree, dry run first, no `--delete`). Then check:
    - `api/fresnel.cgi?nodes` returns nodes;

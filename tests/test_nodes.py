@@ -219,8 +219,15 @@ def test_config_adds_trailing_slash():
     assert cfg.node_feeds[0]["base"] == "http://meshinfo:8090/api/v1/"
 
 
+def test_config_old_nodes_json_url_is_its_folder():
+    cfg = parse_config({"nodes": {"feeds": [{"name": "A", "url": "http://10.0.0.5/meshmap/data/nodes.json"}]}})
+    assert cfg.node_feeds == [{"name": "A", "base": "http://10.0.0.5/meshmap/data/"}]
+
+
 @pytest.mark.parametrize("nodes,message", [
-    ({"feeds": [{"name": "A", "url": "https://a/nodes.json"}]}, "nodes.feeds[0].url was replaced by base"),
+    ({"feeds": [{"name": "A", "url": "https://a/out.json"}]}, "nodes.feeds[0].url was replaced by base"),
+    ({"feeds": [{"name": "A", "url": "https://a/nodes.json", "base": "https://a/"}]}, "url was replaced by base"),
+    ({"feeds": [{"name": "A", "url": "ftp://a/nodes.json"}]}, "nodes.feeds[0].base"),
     ({"feeds": [{"name": "A", "base": "https://a"}, {"name": "A", "base": "https://b"}]}, "unique"),
     ({"feeds": [{"name": "A", "base": "file:///etc/"}]}, "nodes.feeds[0].base"),
     ({"feeds": [{"name": "A", "base": "https://a", "key": 1}]}, "unknown key"),
@@ -287,7 +294,7 @@ def test_api_nodes_feed_down(tmp_path, monkeypatch):
 
 def test_api_config_with_old_url_is_reported(tmp_path):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"nodes": {"feeds": [{"name": "Main", "url": "https://a/nodes.json"}]}}))
+    path.write_text(json.dumps({"nodes": {"feeds": [{"name": "Main", "url": "https://a/feed"}]}}))
     resp = handle_request("GET", "nodes", env={"FRESNEL_CONFIG": str(path)})
     assert resp.status == 500 and "was replaced by base" in json.loads(resp.body)["error"]
 

@@ -11,8 +11,8 @@ import tempfile
 import time
 
 from . import httpjson
+from .config import NODES_FILE
 
-NODES_FILE = "nodes.json"
 STATUS_FILE = "status.json"
 STATUS_TIMEOUT_S = 5.0
 
