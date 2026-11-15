@@ -1052,31 +1052,39 @@ function pinProfileBlock(id) {
   return $(`#profile-pin-${id}`);
 }
 
+// SVG elements don't always drop the HTML `hidden` attribute when .hidden = false,
+// and `[hidden] { display: none !important }` then keeps the plot invisible.
+function setHidden(el, hide) {
+  if (!el) return;
+  if (hide) el.setAttribute("hidden", "");
+  else el.removeAttribute("hidden");
+}
+
 function setPinProfileBusy(block, pin, message) {
   const title = $("h4", block);
   const busy = $(".pin-profile-busy", block);
-  const svg = $("svg", block);
+  const svg = $("svg.profile-plot", block);
   const readout = $(".measure-readout", block);
   if (title) title.textContent = `${pin.name}: loading close-up\u2026`;
   if (busy) {
-    busy.hidden = false;
+    setHidden(busy, false);
     const text = $(".pin-profile-busy-text", busy);
     if (text) text.textContent = message;
   }
-  if (svg) svg.hidden = true;
+  setHidden(svg, true);
   if (readout) {
-    readout.hidden = true;
+    setHidden(readout, true);
     readout.textContent = "";
   }
 }
 
 function setPinProfileReady(block) {
   const busy = $(".pin-profile-busy", block);
-  const svg = $("svg", block);
+  const svg = $("svg.profile-plot", block);
   const readout = $(".measure-readout", block);
-  if (busy) busy.hidden = true;
-  if (svg) svg.hidden = false;
-  if (readout) readout.hidden = false;
+  setHidden(busy, true);
+  setHidden(svg, false);
+  setHidden(readout, false);
 }
 
 async function showPinProfile(pin) {
@@ -1141,9 +1149,9 @@ async function showPinProfile(pin) {
     const busy = $(".pin-profile-busy", block);
     const readout = $(".measure-readout", block);
     if (title) title.textContent = `${pin.name}: close-up failed`;
-    if (busy) busy.hidden = true;
+    setHidden(busy, true);
     if (readout) {
-      readout.hidden = false;
+      setHidden(readout, false);
       readout.textContent = err.message || String(err);
     }
   }
