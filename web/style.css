@@ -167,6 +167,12 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .pin-swatch.hover { background: #ffd43b; box-shadow: inset 0 0 0 1px #1d232b; }
 .pin-remove { float: right; border: none; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0 4px; cursor: pointer; }
 .pin-remove:hover { color: var(--blocked); }
+.gps-copy {
+  background: none; border: none; color: var(--accent); padding: 0; margin: 0;
+  cursor: pointer; font: inherit; text-decoration: underline; text-underline-offset: 2px;
+}
+.gps-copy:hover, .gps-copy:focus-visible { color: var(--ink); }
+.gps-copy.copied { color: var(--clear); text-decoration: none; }
 .trees-row { margin-top: 4px; }
 #map { height: 440px; border: 1px solid var(--line); border-radius: 6px; }
 .leaflet-tooltip.site-tip { font-weight: 600; }

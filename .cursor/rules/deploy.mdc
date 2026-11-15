@@ -9,8 +9,20 @@ alwaysApply: true
 
 | Site | Built from | Destination (exact) |
 |------|------------|---------------------|
-| `https://test.k1rks.me/fresnel_kml/` | `origin/main`, always | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml/` |
-| `https://test.k1rks.me/fresnel_kml_test/` | `origin/site_selection_update` | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml_test/` |
+| production — `https://test.k1rks.me/fresnel_kml/` | `origin/main`, always | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml/` |
+| test — `https://test.k1rks.me/fresnel_kml_test/` | `origin/site_selection_update` | `internal-nginx:/home/webposter/html/test.k1rks.me/fresnel_kml_test/` |
+
+## Which site(s)
+
+When the user says deploy **to test** / **to production** / **to both**, only touch that set:
+
+| Phrase | Deploy |
+|--------|--------|
+| to test | `fresnel_kml_test` only |
+| to production (or to prod) | `fresnel_kml` only |
+| to both | both |
+
+Build and rsync only the site(s) in scope; do not refresh the other.
 
 ## Rules
 
@@ -21,6 +33,8 @@ alwaysApply: true
 - Verify afterwards: the page and `api/fresnel.cgi?sources` return 200.
 
 ## Commands
+
+Only the sites in scope. Example for **both**:
 
 ```bash
 git fetch origin
@@ -34,9 +48,11 @@ ssh internal-nginx "test -d $BASE/fresnel_kml && test -d $BASE/fresnel_kml_test"
 OPTS='-a --exclude __pycache__ --chmod=Dug+rwx,Do+rx,Fug+rw,Fo+r'
 rsync $OPTS -n -i /tmp/fk_main/dist/fresnel_kml/      internal-nginx:$BASE/fresnel_kml/
 rsync $OPTS -n -i /tmp/fk_test/dist/fresnel_kml_test/ internal-nginx:$BASE/fresnel_kml_test/
-# review the dry run, then repeat both without -n -i
+# review the dry run, then repeat without -n -i for the sites in scope
 
 git worktree remove /tmp/fk_main && git worktree remove /tmp/fk_test
 ```
+
+For **to test** alone, only the `/tmp/fk_test` worktree, build `--name fresnel_kml_test`, and rsync to `$BASE/fresnel_kml_test/`. For **to production** alone, only `/tmp/fk_main`, `--name fresnel_kml`, and `$BASE/fresnel_kml/`.
 
 Keep the `+` permission modes: a fixed mode such as `F664` drops the execute bit from `api/fresnel.cgi` and the API returns 403.

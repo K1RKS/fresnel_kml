@@ -819,7 +819,10 @@ function readoutEntry(plot, m, pin) {
   const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
   const lines = [`${remove}${swatch}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
   const ll = latLonAt(plot, m.d);
-  if (ll) lines.push(`GPS: ${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}`);
+  if (ll) {
+    const gps = `${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}`;
+    lines.push(`GPS: <button type="button" class="gps-copy" data-gps="${esc(gps)}" title="Copy coordinates">${esc(gps)}</button>`);
+  }
   if (hasValue(m.ground)) {
     lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
       + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
@@ -1036,10 +1039,35 @@ function setupMeasure(svg) {
   const readout = readoutFor(svg);
   if (readout) {
     readout.addEventListener("click", (ev) => {
-      const button = ev.target.closest(".pin-remove");
-      if (button && ready()) removePin(svg, Number(button.dataset.pin));
+      const remove = ev.target.closest(".pin-remove");
+      if (remove && ready()) {
+        removePin(svg, Number(remove.dataset.pin));
+        return;
+      }
+      const gps = ev.target.closest(".gps-copy");
+      if (gps) copyGps(gps);
     });
   }
+}
+
+async function copyGps(button) {
+  const text = button.dataset.gps;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    window.prompt("Copy these coordinates:", text);
+    return;
+  }
+  const prev = button.textContent;
+  button.textContent = "Copied";
+  button.classList.add("copied");
+  setTimeout(() => {
+    if (button.isConnected) {
+      button.textContent = prev;
+      button.classList.remove("copied");
+    }
+  }, 1500);
 }
 
 async function submit(ev) {
