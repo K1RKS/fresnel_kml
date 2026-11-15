@@ -845,7 +845,11 @@ function readoutEntry(plot, m, pin) {
   const to = `${dfmt(Math.max(0, plot.D - m.d), 2)} to ${esc(b.name)}`;
   const swatch = pin ? `<span class="pin-swatch" style="background:${pin.color}"></span>` : '<span class="pin-swatch hover"></span>';
   const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
-  const profileBtn = pin ? `<button type="button" class="pin-profile" data-pin="${pin.id}" title="Close-up profile centred here">Profile</button>` : "";
+  const profileBtn = pin
+    ? `<button type="button" class="pin-profile" data-pin="${pin.id}"`
+      + `${pin.profileRequested ? " disabled" : ""}`
+      + ` title="${pin.profileRequested ? "Close-up already shown" : "Close-up profile centred here"}">Profile</button>`
+    : "";
   const label = pin ? `<strong class="pin-name">${esc(pin.name)}</strong> ` : "";
   const lines = [`${remove}${profileBtn}${swatch}${label}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
   const ll = latLonAt(plot, m.d);
@@ -1048,8 +1052,39 @@ function pinProfileBlock(id) {
   return $(`#profile-pin-${id}`);
 }
 
+function setPinProfileBusy(block, pin, message) {
+  const title = $("h4", block);
+  const busy = $(".pin-profile-busy", block);
+  const svg = $("svg", block);
+  const readout = $(".measure-readout", block);
+  if (title) title.textContent = `${pin.name}: loading close-up\u2026`;
+  if (busy) {
+    busy.hidden = false;
+    const text = $(".pin-profile-busy-text", busy);
+    if (text) text.textContent = message;
+  }
+  if (svg) svg.hidden = true;
+  if (readout) {
+    readout.hidden = true;
+    readout.textContent = "";
+  }
+}
+
+function setPinProfileReady(block) {
+  const busy = $(".pin-profile-busy", block);
+  const svg = $("svg", block);
+  const readout = $(".measure-readout", block);
+  if (busy) busy.hidden = true;
+  if (svg) svg.hidden = false;
+  if (readout) readout.hidden = false;
+}
+
 async function showPinProfile(pin) {
-  if (!lastRequest || !lastReport) return;
+  if (!lastRequest || !lastReport || pin.profileRequested) return;
+  pin.profileRequested = true;
+  const owner = findPin(pin.id);
+  if (owner) renderMeasure(owner.svg);
+
   const box = $("#profile-pins");
   if (!box) return;
   let block = pinProfileBlock(pin.id);
@@ -1059,23 +1094,26 @@ async function showPinProfile(pin) {
     block.className = "pin-profile-block";
     block.style.setProperty("--pin-color", pin.color);
     block.innerHTML = `<h4 class="plot-title"></h4>`
-      + `<svg class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" `
+      + `<div class="pin-profile-busy" aria-live="polite">`
+      + `<progress></progress>`
+      + `<span class="pin-profile-busy-text"></span>`
+      + `</div>`
+      + `<svg class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" hidden `
       + `aria-label="Close-up terrain profile at ${esc(pin.name)}"></svg>`
-      + `<div class="measure-readout" aria-live="polite"></div>`;
+      + `<div class="measure-readout" aria-live="polite" hidden></div>`;
     box.appendChild(block);
     setupMeasure($("svg", block));
   }
-  const title = $("h4", block);
-  const svg = $("svg", block);
-  const readout = $(".measure-readout", block);
-  title.textContent = `${pin.name}: loading close-up\u2026`;
-  if (readout) readout.textContent = "Fetching dense terrain for this close-up\u2026";
+  setPinProfileBusy(block, pin, "Looking up ground elevations\u2026");
+  block.scrollIntoView({ behavior: "smooth", block: "nearest" });
   try {
     const resp = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...lastRequest, format: "json", closeup_d_m: pin.d }),
     });
+    if (!pinProfileBlock(pin.id)) return;
+    setPinProfileBusy(block, pin, "Building the close-up profile\u2026");
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     if (!pinProfileBlock(pin.id)) return;  // pin removed while waiting
@@ -1087,16 +1125,27 @@ async function showPinProfile(pin) {
       { d: D, name: b.name, ground: b.ground_m, top: b.asl_m },
     ];
     const win = windowLabel(data.end_window_m);
+    const title = $("h4", block);
+    const svg = $("svg", block);
     title.textContent = `${pin.name}: close-up ${win} centred ${dfmt(data.d_m, 2)} from ${a.name}`;
     const surface = data.surface && data.surface.enabled ? data.surface : null;
+    setPinProfileReady(block);
     drawPlot(svg, pts, {
       d0: data.d0_m, d1: data.d1_m, masts, from: "a", surface, trees: Boolean(data.trees),
     });
-    block.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch (err) {
     if (!pinProfileBlock(pin.id)) return;
-    title.textContent = `${pin.name}: close-up failed`;
-    if (readout) readout.textContent = err.message || String(err);
+    pin.profileRequested = false;
+    if (owner) renderMeasure(owner.svg);
+    const title = $("h4", block);
+    const busy = $(".pin-profile-busy", block);
+    const readout = $(".measure-readout", block);
+    if (title) title.textContent = `${pin.name}: close-up failed`;
+    if (busy) busy.hidden = true;
+    if (readout) {
+      readout.hidden = false;
+      readout.textContent = err.message || String(err);
+    }
   }
 }
 
@@ -1207,7 +1256,7 @@ function setupMeasure(svg) {
         return;
       }
       const profile = ev.target.closest(".pin-profile");
-      if (profile && ready()) {
+      if (profile && ready() && !profile.disabled) {
         const found = findPin(Number(profile.dataset.pin));
         if (found) showPinProfile(found.pin);
         return;
