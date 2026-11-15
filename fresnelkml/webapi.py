@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from . import __version__
-from .analysis import AnalysisError, analyze
+from .analysis import AnalysisError, analyze, closeup_profile
 from .config import ConfigError, build_chain, load_config
 from .coords import LAT, LON, CoordinateError, format_position, parse_coordinate, parse_position
 from .elevation import ElevationUnavailable
@@ -219,6 +219,13 @@ def _post(body: bytes, env) -> Response:
         cfg = load_config(env=env)
     except ConfigError as exc:
         return _error(500, f"Server configuration error: {exc}")
+    if req.closeup_d_m is not None:
+        try:
+            data = closeup_profile(req.site_a, req.site_b, req.closeup_d_m, req.options, config=cfg, env=env)
+        except (AnalysisError, ElevationUnavailable, TimeoutError) as exc:
+            return _failure(exc)
+        data["warnings"] = req.warnings + data.get("warnings", [])
+        return _json(200, data)
     if req.progress:
         return Response(200, b"", [("Content-Type", NDJSON_TYPE), ("Cache-Control", "no-store"),
                                    ("X-Accel-Buffering", "no")], stream=_progress_stream(req, cfg, env))

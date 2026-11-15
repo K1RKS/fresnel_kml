@@ -131,3 +131,36 @@ def test_coord_display_in_report():
     r = analyze(Site("A", 37.0341667, -122.0833333, asl_m=10), Site("B", 37.05, -121.9, asl_m=10),
                 Options(coord_display="dms"))
     assert r.to_dict()["sites"][0]["display"] == "37°02'03.0\"N 122°05'00.0\"W"
+
+
+def test_closeup_bounds_centred_and_clamped():
+    from fresnelkml.analysis import AnalysisError, closeup_bounds
+    assert closeup_bounds(5000, 10_000, 152.4) == pytest.approx((5000 - 76.2, 5000 + 76.2))
+    assert closeup_bounds(10, 10_000, 152.4) == pytest.approx((0.0, 152.4))
+    assert closeup_bounds(9990, 10_000, 152.4) == pytest.approx((10_000 - 152.4, 10_000))
+    assert closeup_bounds(50, 100, 152.4) == pytest.approx((0.0, 100.0))
+    with pytest.raises(AnalysisError):
+        closeup_bounds(-1, 100, 50)
+    with pytest.raises(AnalysisError):
+        closeup_bounds(101, 100, 50)
+
+
+def test_closeup_profile_matches_end_window_density(fake_chain):
+    from fresnelkml.analysis import closeup_profile, closeup_sample_count
+    chain, _ = fake_chain(lambda lat, lon: 0.0)
+    a, b = Site("A", 0.0, 0.0, agl_m=10), Site("B", 0.0, TEN_KM_LON, agl_m=10)
+    window = 500 * 0.3048
+    mid = closeup_profile(a, b, 5000.0, Options(end_window_m=window), elevation=chain)
+    assert mid["end_window_m"] == pytest.approx(window)
+    assert mid["d1_m"] - mid["d0_m"] == pytest.approx(window)
+    assert mid["d_m"] == pytest.approx(5000.0)
+    assert abs((mid["d0_m"] + mid["d1_m"]) / 2 - 5000.0) < 0.01
+    assert len(mid["profile"]) == closeup_sample_count(window) + 1
+    assert len(mid["profile"]) == 26  # same as First/Last at the default window
+    ds = [p["d_m"] for p in mid["profile"]]
+    assert ds == sorted(ds)
+    assert ds[0] == pytest.approx(mid["d0_m"])
+    assert ds[-1] == pytest.approx(mid["d1_m"])
+    near = closeup_profile(a, b, 20.0, Options(end_window_m=window), elevation=chain)
+    assert near["d0_m"] == pytest.approx(0.0)
+    assert near["d1_m"] == pytest.approx(window)

@@ -14,7 +14,7 @@ from .units import FEET
 SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m",
              "tx_power_dbm", "noise_dbm", "gain_dbi", "azimuth_deg", "elevation_deg", "beamwidth_deg"}
 RF_SITE_KEYS = ("tx_power_dbm", "noise_dbm", "gain_dbi", "azimuth_deg", "elevation_deg", "beamwidth_deg")
-REQUEST_KEYS = {"site_a", "site_b", "options", "format", "progress"}
+REQUEST_KEYS = {"site_a", "site_b", "options", "format", "progress", "closeup_d_m"}
 OPTION_KEYS = {f.name for f in fields(Options)} | {"units", "tree_clearance_m"}
 IGNORED_OPTION_KEYS = {"google_key"}
 
@@ -34,6 +34,7 @@ class ParsedRequest:
     format: str = "kml"
     warnings: list[str] = field(default_factory=list)
     progress: bool = False  # stream progress lines before the result (JSON format only)
+    closeup_d_m: float | None = None  # dense profile window centred here; JSON only, no KML
 
 
 def _number(value, where: str) -> float:
@@ -185,12 +186,21 @@ def parse_request(data) -> ParsedRequest:
     progress = data.get("progress") is not None and _boolean(data["progress"], "progress")
     if progress and fmt != "json":
         raise RequestError("progress needs format 'json'.", "progress")
+    closeup_d_m = None
+    if "closeup_d_m" in data and data["closeup_d_m"] is not None:
+        closeup_d_m = _number(data["closeup_d_m"], "closeup_d_m")
+        if not math.isfinite(closeup_d_m) or closeup_d_m < 0:
+            raise RequestError("closeup_d_m must be a non-negative distance along the path.", "closeup_d_m")
+        if fmt != "json":
+            raise RequestError("closeup_d_m needs format 'json'.", "closeup_d_m")
+        if progress:
+            raise RequestError("closeup_d_m cannot be used with progress.", "progress")
     for key in ("site_a", "site_b"):
         if key not in data:
             raise RequestError(f"{key} is required.", key)
     site_a, wa = parse_site_dict(data["site_a"], "site_a", units)
     site_b, wb = parse_site_dict(data["site_b"], "site_b", units)
-    return ParsedRequest(site_a, site_b, opt, units, fmt, warnings + wa + wb, progress)
+    return ParsedRequest(site_a, site_b, opt, units, fmt, warnings + wa + wb, progress, closeup_d_m)
 
 
 _HEIGHT_RE = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*(agl|asl)?$", re.I)

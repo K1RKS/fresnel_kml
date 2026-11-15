@@ -48,6 +48,31 @@ def test_json_response_with_terrain(local_config):
     assert r["snr"]["ab"]["estimated_snr_db"] is not None
 
 
+def test_closeup_json_response(local_config):
+    resp = handle_request(
+        "POST", "",
+        body(format="json", closeup_d_m=500, options={"terrain_check": True, "color": "#336699"}),
+        env={"FRESNEL_CONFIG": local_config})
+    assert resp.status == 200
+    data = json.loads(resp.body)
+    assert "kml" not in data and "report" not in data
+    assert data["d_m"] == 500
+    assert data["d1_m"] > data["d0_m"]
+    assert len(data["profile"]) >= 26
+    assert data["profile"][0]["d_m"] == pytest.approx(data["d0_m"])
+    assert data["profile"][-1]["d_m"] == pytest.approx(data["d1_m"])
+    assert len(data["sites"]) == 2
+
+
+def test_closeup_requires_json_not_progress():
+    resp = handle_request("POST", "", body(closeup_d_m=100), env={})
+    assert resp.status == 400
+    assert json.loads(resp.body)["field"] == "closeup_d_m"
+    resp = handle_request("POST", "", body(format="json", closeup_d_m=100, progress=True), env={})
+    assert resp.status == 400
+    assert json.loads(resp.body)["field"] == "progress"
+
+
 def test_json_snr_with_rf_fields(local_config):
     payload = body(
         format="json",

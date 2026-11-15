@@ -566,6 +566,256 @@ def terrain_station_count(distance_m: float, stations: int) -> int:
     return min(n, MAX_STATIONS)
 
 
+def closeup_sample_count(window: float) -> int:
+    """How many steps across a close-up window (same spacing rule as First/Last)."""
+    return max(END_SAMPLES, min(MAX_END_SAMPLES, math.ceil(window / (END_WINDOW_M / END_SAMPLES))))
+
+
+def closeup_bounds(d_m: float, distance: float, window: float) -> tuple[float, float]:
+    """[d0, d1] of length min(window, distance), centred on d_m when the path is long enough."""
+    if not _finite(d_m) or d_m < 0 or d_m > distance:
+        raise AnalysisError("closeup_d_m must lie on the path (0 to the link distance).", "closeup_d_m")
+    win = min(window, distance)
+    d0, d1 = d_m - win / 2, d_m + win / 2
+    if d0 < 0:
+        d0, d1 = 0.0, win
+    elif d1 > distance:
+        d0, d1 = distance - win, distance
+    return d0, d1
+
+
+def closeup_path_points(site_a: Site, bearing_ab: float, distance: float, d0: float, d1: float,
+                        samples: int) -> list[geo.PathPoint]:
+    """Evenly spaced path points from d0 to d1 inclusive."""
+    pts = []
+    span = d1 - d0
+    for i in range(samples + 1):
+        d = d0 + span * i / samples if samples else d0
+        lat, lon, brg = (geo.forward(site_a.lat, site_a.lon, bearing_ab, d) if d
+                         else (site_a.lat, site_a.lon, bearing_ab))
+        pts.append(geo.PathPoint(d / distance, lat, geo.normalize_lon(lon), brg))
+    return pts
+
+
+def _elevation_chain(elevation, config, env, elev_source: str):
+    chain = elevation
+    if chain is None:
+        from .config import build_chain, load_config
+        cfg = config or load_config(env=env)
+        try:
+            chain = build_chain(cfg, only=elev_source, env=env)
+        except KeyError:
+            raise AnalysisError(f"Unknown elevation source '{elev_source}'.", "options.elev_source") from None
+    elif elev_source not in ("auto", None):
+        try:
+            chain = chain.only(elev_source)
+        except KeyError:
+            raise AnalysisError(f"Unknown elevation source '{elev_source}'.", "options.elev_source") from None
+    return chain
+
+
+def _site_results(site_a: Site, site_b: Site, site_lookup: list, warnings: list[str],
+                  units: str) -> tuple[SiteResult, SiteResult]:
+    results = []
+    for label, s, found in (("site_a", site_a, site_lookup[0]), ("site_b", site_b, site_lookup[1])):
+        if s.ground_m is not None:
+            ground, source = float(s.ground_m), "manual"
+        elif found is not None:
+            ground, source = found.elevation, found.source
+        else:
+            ground, source = None, None
+        if s.agl_m is not None:
+            asl = ground + s.agl_m
+            agl = float(s.agl_m)
+            ref = "agl"
+        else:
+            asl = float(s.asl_m)
+            ref = "asl"
+            agl = None if ground is None else asl - ground
+            if agl is not None and agl < 0 and s.ground_m is None:
+                warnings.append(f"{s.name}: the given height above sea level is {fmt_height(-agl, units)} "
+                                f"below the looked-up ground ({source}).")
+        results.append(SiteResult(s.name, s.lat, s.lon, s.position_format, ref, asl, agl, ground, source))
+    return results[0], results[1]
+
+
+def _closeup_surface(report: LinkReport, site_a: Site, d0: float, d1: float, sampler, deadline,
+                     progress=None) -> dict | None:
+    """Dense lidar (or tree fallback) over [d0, d1] only; returns a drawPlot-ready surface slice."""
+    opt, distance = report.options, report.distance_m
+    start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
+    seg0, seg1 = max(d0, start), min(d1, stop)
+    if seg1 <= seg0:
+        return None
+    fractions = (0.0,) if opt.lidar_width == 0 else LATERAL_FRACTIONS
+    spacing = sampler.cfg.spacing_m
+    n = max(1, int(round((seg1 - seg0) / spacing)))
+    dists = [seg0 + i * (seg1 - seg0) / n for i in range(n + 1)]
+    stations, grid = [], []
+    for d in dists:
+        lat, lon, brg = geo.forward(site_a.lat, site_a.lon, report.bearing_ab, d) if d else (
+            site_a.lat, site_a.lon, report.bearing_ab)
+        lon = geo.normalize_lon(lon)
+        r1 = fresnel.zone_radius(d, distance - d, report.wavelength_m, 1)
+        theta = math.radians(brg)
+        for f in fractions:
+            y = f * opt.lidar_width * r1
+            grid.append((y, *(geo.offset(lat, lon, y * math.cos(theta), -y * math.sin(theta)) if y else (lat, lon))))
+        stations.append((d, lat, lon, r1))
+    lidar_progress = (lambda done, total: progress("lidar", done, total)) if progress else None
+    got = sampler.sample([(g[1], g[2]) for g in grid], deadline, progress=lidar_progress)
+    lookup = _ProfileLookup(report.profile)
+    ra, rb, k = report.site_a, report.site_b, len(fractions)
+    keys = got.datasets or [None] * len(got.values)
+    points, covered = [], 0
+    station_keys, worst_keys = {}, {}
+    for si, (d, lat, lon, r1) in enumerate(stations):
+        t = d / distance
+        los = (1 - t) * ra.asl_m + t * rb.asl_m
+        bulge = fresnel.earth_bulge(d, distance - d, opt.k)
+        ground, effective = lookup(d, "ground_m"), lookup(d, "effective_m")
+        usable = r1 >= MIN_R1_FOR_CLEARANCE
+        if got.values[si * k] is None:
+            peak = effective + opt.tree_height_m
+            points.append(SurfacePoint(d, lat, lon, 0.0, peak - bulge, ground, effective, peak, los, r1,
+                                       (los - peak) / r1 if usable else None, False))
+            continue
+        covered += 1
+        worst, peak = None, -math.inf
+        for j in range(k):
+            v = got.values[si * k + j]
+            if v is None:
+                continue
+            y, plat, plon = grid[si * k + j]
+            peak = max(peak, v + bulge)
+            c = lateral_clearance(los - v - bulge, y, r1) if usable else None
+            if worst is None or (c is not None and (worst[0] is None or c < worst[0])):
+                worst = (c, y, plat, plon, v, keys[si * k + j])
+        c, y, plat, plon, v, worst_keys[len(points)] = worst
+        station_keys[len(points)] = keys[si * k]
+        points.append(SurfacePoint(d, plat, plon, y, v, ground, effective, peak, los, r1, c, True))
+    weights = _station_weights(points)
+    _describe_datasets(report, sampler, got, grid, station_keys, worst_keys, points, weights, deadline)
+    report.surface_checked = True
+    report.surface_points = points
+    markers = obstruction_markers(points, CLEAR_RATIO)
+    return {
+        "enabled": True,
+        "plot": [_surface_point_dict(p) for p in window_points(points, d0, d1)],
+        "markers": [_surface_point_dict(p) for p in markers if d0 - 1e-6 <= p.d_m <= d1 + 1e-6],
+        "datasets": report.surface_datasets,
+        "coverage": None if not weights else round(
+            sum(w for p, w in zip(points, weights) if p.lidar) / sum(weights), 3),
+    }
+
+
+def closeup_profile(site_a: Site, site_b: Site, d_m: float, options: Options | None = None, *,
+                    elevation=None, config=None, env=None, surface=None, progress=None) -> dict:
+    """Dense terrain close-up centred on d_m, same window width/spacing as First/Last end profiles."""
+    started = time.monotonic()
+    progress = progress or (lambda stage, done=None, total=None: None)
+    opt = options or Options()
+    validate_options(opt)
+    validate_site(site_a, "site_a")
+    validate_site(site_b, "site_b")
+    warnings: list[str] = []
+
+    for label, s in (("site_a", site_a), ("site_b", site_b)):
+        if opt.mode == "relative" and s.asl_m is not None and s.ground_m is None:
+            raise AnalysisError(f"{label}: relative mode needs the height above ground; give agl_m, or ground_m "
+                                "along with asl_m.", f"{label}.asl_m")
+
+    distance, bearing_ab, bearing_ba = geo.inverse(site_a.lat, site_a.lon, site_b.lat, site_b.lon)
+    if distance < MIN_DISTANCE_M:
+        raise AnalysisError("The two sites are less than 1 m apart.", "site_b")
+
+    window = min(opt.end_window_m, distance)
+    d0, d1 = closeup_bounds(d_m, distance, window)
+    samples = closeup_sample_count(d1 - d0)
+    path_pts = closeup_path_points(site_a, bearing_ab, distance, d0, d1, samples)
+
+    needs_ground = [s.agl_m is not None and s.ground_m is None for s in (site_a, site_b)]
+    site_pts = [(s.lat, s.lon) for s, need in zip((site_a, site_b), needs_ground) if need]
+    lookup_pts = site_pts + [(p.lat, p.lon) for p in path_pts]
+    chain = _elevation_chain(elevation, config, env, opt.elev_source)
+    progress("ground", 0, len(lookup_pts))
+    looked_up = chain.lookup(lookup_pts)
+    progress("ground", len(looked_up), len(lookup_pts))
+    if any(r.assumed_zero for r in looked_up):
+        warnings.append(f"{sum(r.assumed_zero for r in looked_up)} point(s) returned no elevation "
+                        "(open water?); treated as 0 m.")
+
+    site_found = [None, None]
+    it = iter(looked_up[:len(site_pts)])
+    for i, need in enumerate(needs_ground):
+        if need:
+            site_found[i] = next(it)
+    path_found = looked_up[len(site_pts):]
+    ra, rb = _site_results(site_a, site_b, site_found, warnings, opt.units)
+
+    lam = fresnel.wavelength(opt.freq_ghz * 1e9)
+
+    def sample(p: geo.PathPoint, found: ElevationResult) -> ProfilePoint:
+        d = p.t * distance
+        bulge = fresnel.earth_bulge(d, distance - d, opt.k)
+        effective = found.elevation + bulge + opt.clutter_m
+        los = (1 - p.t) * ra.asl_m + p.t * rb.asl_m
+        r1 = fresnel.zone_radius(d, distance - d, lam, 1)
+        c = (los - effective) / r1 if r1 >= MIN_R1_FOR_CLEARANCE else None
+        return ProfilePoint(p.t, d, p.lat, p.lon, found.elevation, bulge, effective, los, r1, c)
+
+    profile = [sample(p, f) for p, f in zip(path_pts, path_found)]
+    trees_on = False
+    if opt.trees and opt.tree_source != "lidar":
+        trees_on = True
+        start, stop = opt.tree_clearance_a_m, distance - opt.tree_clearance_b_m
+        for p in profile:
+            if start <= p.d_m <= stop:
+                p.tree_top_m = p.effective_m + opt.tree_height_m
+                if p.r1_m >= MIN_R1_FOR_CLEARANCE:
+                    p.tree_clearance = (p.los_m - p.tree_top_m) / p.r1_m
+
+    # Minimal report so surface sampling can reuse helpers / dataset describe.
+    report = LinkReport(
+        site_a=ra, site_b=rb, options=opt, freq_hz=opt.freq_ghz * 1e9, wavelength_m=lam,
+        distance_m=distance, bearing_ab=bearing_ab, bearing_ba=bearing_ba,
+        tilt_ab=0.0, tilt_ba=0.0, zone_max_m=0.0, r1_max_m=0.0, r60_max_m=0.0,
+        stations=[], zone_color=parse_color("#336699"), warnings=warnings,
+        terrain_checked=True, profile=profile, end_window_m=window,
+    )
+
+    surface_dict = None
+    if opt.trees and opt.tree_source == "lidar":
+        if surface is None:
+            from .cache import CacheSet
+            from .config import load_config
+            from .surface import SurfaceSampler
+            cfg = config or load_config(env=env)
+            surface = SurfaceSampler(cfg.surface, CacheSet.from_config(cfg))
+        deadline = min(started + REQUEST_LIMIT_S, time.monotonic() + surface.cfg.time_budget_s)
+        surface_dict = _closeup_surface(report, site_a, d0, d1, surface, deadline, progress)
+        warnings = report.warnings
+
+    def site_dict(s: SiteResult) -> dict:
+        return {
+            "name": s.name, "lat": round(s.lat, 7), "lon": round(s.lon, 7),
+            "asl_m": _r(s.asl_m), "agl_m": _r(s.agl_m), "ground_m": _r(s.ground_m),
+        }
+
+    return {
+        "d_m": _r(d_m),
+        "d0_m": _r(d0),
+        "d1_m": _r(d1),
+        "end_window_m": _r(window),
+        "distance_m": _r(distance),
+        "sites": [site_dict(ra), site_dict(rb)],
+        "profile": [_point_dict(p) for p in profile],
+        "trees": trees_on,
+        "surface": surface_dict,
+        "warnings": warnings,
+    }
+
+
 def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, elevation=None, config=None,
             rng: random.Random | None = None, env=None, surface=None, progress=None) -> LinkReport:
     """Compute everything needed to render the KML. `elevation` is an ElevationChain and `surface` a

@@ -7,6 +7,8 @@ const DECIMAL_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
 
 let lastKml = null;
 let lastFilename = "fresnel.kml";
+let lastRequest = null;  // last successful full analysis request (for pin close-ups)
+let lastReport = null;
 
 function siteFieldset(key) {
   return $(`fieldset[data-site="${key}"]`);
@@ -366,10 +368,16 @@ function esc(text) {
   return d.innerHTML;
 }
 
-function showResult(data, units, picks = [], feedHeights = []) {
+function showResult(data, units, picks = [], feedHeights = [], request = null) {
   resultUnits = units === "ft" ? "ft" : "m";
   const r = data.report;
   lastKml = data.kml;
+  lastReport = r;
+  if (request) {
+    const { progress, closeup_d_m, ...rest } = request;
+    lastRequest = { ...rest, format: "json" };
+  }
+  clearPinProfiles();
   const [a, b] = r.sites;
   lastFilename = `Fresnel_${a.name}_${b.name}`.replace(/[^A-Za-z0-9._-]+/g, "_") + ".kml";
 
@@ -449,10 +457,17 @@ function showResult(data, units, picks = [], feedHeights = []) {
   $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function windowLabel(metres) {
+  const feet = metres / FEET;
+  return resultUnits === "ft" ? (feet < 5280 ? `${feet.toFixed(0)} ft` : dfmt(metres, 2))
+    : (metres < 1000 ? `${metres.toFixed(0)} m` : dfmt(metres, 2));
+}
+
 function drawProfile(r) {
   const box = $("#profile-box");
   if (!r.terrain_checked || !r.profile.length) {
     box.hidden = true;
+    clearPinProfiles();
     return;
   }
   box.hidden = false;
@@ -466,9 +481,7 @@ function drawProfile(r) {
   const surface = r.surface && r.surface.enabled ? r.surface : null;
   const trees = Boolean(r.trees && r.trees.enabled);
   drawPlot($("#profile-main"), p, { d0: 0, d1: D, masts, from: "a", surface, trees });
-  const feet = r.end_window_m / FEET;
-  const win = resultUnits === "ft" ? (feet < 5280 ? `${feet.toFixed(0)} ft` : dfmt(r.end_window_m, 2))
-    : (r.end_window_m < 1000 ? `${r.end_window_m.toFixed(0)} m` : dfmt(r.end_window_m, 2));
+  const win = windowLabel(r.end_window_m);
   const zoom = [[r.profile_a, "a", "#profile-a", "#profile-title-a", `First ${win} from ${a.name}`],
                 [r.profile_b, "b", "#profile-b", "#profile-title-b", `Last ${win} to ${b.name}`]];
   for (const [pts, from, svgSel, titleSel, title] of zoom) {
@@ -563,7 +576,7 @@ function drawMap(r) {
   }
   map.invalidateSize();
   mapReport = r;
-  $$(".map-views button").forEach((btn) => {
+  $$(".map-views button[data-view=a], .map-views button[data-view=b]").forEach((btn) => {
     const site = { a: r.sites[0], b: r.sites[1] }[btn.dataset.view];
     if (site) {
       btn.textContent = site.name;
@@ -576,16 +589,31 @@ function drawMap(r) {
 const SITE_ZOOM = 17;  // close enough to see buildings and treelines around a site
 let mapReport = null;
 
-function showMapView(view) {
+function showMapView(view, pinId = null) {
   if (!map || !mapReport) return;
-  $$(".map-views button").forEach((btn) => btn.classList.toggle("active", btn.dataset.view === view));
+  $$(".map-views button").forEach((btn) => {
+    const on = pinId !== null
+      ? Number(btn.dataset.pin) === pinId
+      : btn.dataset.view === view && btn.dataset.pin == null;
+    btn.classList.toggle("active", on);
+  });
+  if (pinId !== null) {
+    const at = pinLocation(pinId);
+    if (at) map.setView(at, Math.min(SITE_ZOOM, map.getMaxZoom()));
+    return;
+  }
   const site = { a: mapReport.sites[0], b: mapReport.sites[1] }[view];
   if (site) map.setView([site.lat, site.lon], Math.min(SITE_ZOOM, map.getMaxZoom()));
   else map.fitBounds(L.latLngBounds(mapReport.map.los).pad(0.15));
 }
 
 function setupMapViews() {
-  $$(".map-views button").forEach((btn) => btn.addEventListener("click", () => showMapView(btn.dataset.view)));
+  $(".map-views").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button");
+    if (!btn || !btn.closest(".map-views")) return;
+    if (btn.dataset.pin != null) showMapView("pin", Number(btn.dataset.pin));
+    else showMapView(btn.dataset.view);
+  });
 }
 
 // Consecutive samples that have trees on them.
@@ -817,7 +845,9 @@ function readoutEntry(plot, m, pin) {
   const to = `${dfmt(Math.max(0, plot.D - m.d), 2)} to ${esc(b.name)}`;
   const swatch = pin ? `<span class="pin-swatch" style="background:${pin.color}"></span>` : '<span class="pin-swatch hover"></span>';
   const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
-  const lines = [`${remove}${swatch}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
+  const profileBtn = pin ? `<button type="button" class="pin-profile" data-pin="${pin.id}" title="Close-up profile centred here">Profile</button>` : "";
+  const label = pin ? `<strong class="pin-name">${esc(pin.name)}</strong> ` : "";
+  const lines = [`${remove}${profileBtn}${swatch}${label}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
   const ll = latLonAt(plot, m.d);
   if (ll) {
     const gps = `${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}`;
@@ -879,13 +909,74 @@ let hoverSource = null;  // the profile graph being hovered, whose cursor the fa
 let mapHover = null;
 const mapPins = new Map();  // marker id -> its map marker
 
+function measuredSvgs() {
+  return MEASURED_PLOTS.map((sel) => $(sel)).concat($$("#profile-pins .profile-plot")).filter(Boolean);
+}
+
 function latLonAt(plot, d) {
   const lat = interp(plot.p, d, "lat"), lon = interp(plot.p, d, "lon");
   return hasValue(lat) && hasValue(lon) ? [lat, lon] : null;
 }
 
+function pinLocation(id) {
+  for (const svg of measuredSvgs()) {
+    const st = svg._measure, plot = svg._plot;
+    if (!st || !plot || svg.hidden) continue;
+    const pin = st.pins.find((p) => p.id === id);
+    if (pin) return latLonAt(plot, pin.d);
+  }
+  return null;
+}
+
+function livePins() {
+  const pins = [];
+  for (const svg of measuredSvgs()) {
+    const st = svg._measure;
+    if (!st || svg.hidden) continue;
+    for (const pin of st.pins) pins.push(pin);
+  }
+  return pins.sort((a, b) => a.id - b.id);
+}
+
+function findPin(id) {
+  for (const svg of measuredSvgs()) {
+    const st = svg._measure;
+    if (!st) continue;
+    const pin = st.pins.find((p) => p.id === id);
+    if (pin) return { svg, pin };
+  }
+  return null;
+}
+
+// Z1 / Z2 / … buttons next to Site A / Site B / Whole path; added and removed with the markers.
+function syncMapPinViews() {
+  const bar = $(".map-views");
+  if (!bar) return;
+  const pins = livePins();
+  const wanted = new Set(pins.map((p) => String(p.id)));
+  bar.querySelectorAll("button[data-pin]").forEach((btn) => {
+    if (!wanted.has(btn.dataset.pin)) btn.remove();
+  });
+  for (const pin of pins) {
+    let btn = bar.querySelector(`button[data-pin="${pin.id}"]`);
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.view = "pin";
+      btn.dataset.pin = String(pin.id);
+      bar.appendChild(btn);
+    }
+    btn.textContent = pin.name;
+    btn.title = `Zoom to ${pin.name}`;
+    btn.style.setProperty("--pin-color", pin.color);
+  }
+}
+
 function syncMapMarkers() {
-  if (!map) return;
+  if (!map) {
+    syncMapPinViews();
+    return;
+  }
   const hs = hoverSource && hoverSource._measure;
   const hoverAt = hs && hasValue(hs.hover) ? latLonAt(hoverSource._plot, hs.hover) : null;
   if (!hoverAt) {
@@ -902,8 +993,8 @@ function syncMapMarkers() {
     if (!mapHover.isTooltipOpen()) mapHover.openTooltip();
   }
   const live = new Set();
-  for (const sel of MEASURED_PLOTS) {
-    const svg = $(sel), st = svg._measure, plot = svg._plot;
+  for (const svg of measuredSvgs()) {
+    const st = svg._measure, plot = svg._plot;
     if (!st || !plot || svg.hidden) continue;
     for (const pin of st.pins) {
       const at = latLonAt(plot, pin.d);
@@ -926,6 +1017,7 @@ function syncMapMarkers() {
       mapPins.delete(id);
     }
   }
+  syncMapPinViews();
 }
 
 function resetMeasure(svg) {
@@ -938,7 +1030,74 @@ function removePin(svg, id) {
   st.pins = st.pins.filter((pin) => pin.id !== id);
   if (st.selected === id) st.selected = st.pins.length ? st.pins[st.pins.length - 1].id : null;
   if (st.dragging === id) st.dragging = null;
+  removePinProfile(id);
   renderMeasure(svg);
+}
+
+function clearPinProfiles() {
+  const box = $("#profile-pins");
+  if (box) box.innerHTML = "";
+}
+
+function removePinProfile(id) {
+  const block = $(`#profile-pin-${id}`);
+  if (block) block.remove();
+}
+
+function pinProfileBlock(id) {
+  return $(`#profile-pin-${id}`);
+}
+
+async function showPinProfile(pin) {
+  if (!lastRequest || !lastReport) return;
+  const box = $("#profile-pins");
+  if (!box) return;
+  let block = pinProfileBlock(pin.id);
+  if (!block) {
+    block = document.createElement("div");
+    block.id = `profile-pin-${pin.id}`;
+    block.className = "pin-profile-block";
+    block.style.setProperty("--pin-color", pin.color);
+    block.innerHTML = `<h4 class="plot-title"></h4>`
+      + `<svg class="profile-plot" viewBox="0 0 800 260" role="img" tabindex="0" `
+      + `aria-label="Close-up terrain profile at ${esc(pin.name)}"></svg>`
+      + `<div class="measure-readout" aria-live="polite"></div>`;
+    box.appendChild(block);
+    setupMeasure($("svg", block));
+  }
+  const title = $("h4", block);
+  const svg = $("svg", block);
+  const readout = $(".measure-readout", block);
+  title.textContent = `${pin.name}: loading close-up\u2026`;
+  if (readout) readout.textContent = "Fetching dense terrain for this close-up\u2026";
+  try {
+    const resp = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...lastRequest, format: "json", closeup_d_m: pin.d }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    if (!pinProfileBlock(pin.id)) return;  // pin removed while waiting
+    const [a, b] = data.sites;
+    const D = data.distance_m;
+    const pts = data.profile;
+    const masts = [
+      { d: 0, name: a.name, ground: a.ground_m, top: a.asl_m },
+      { d: D, name: b.name, ground: b.ground_m, top: b.asl_m },
+    ];
+    const win = windowLabel(data.end_window_m);
+    title.textContent = `${pin.name}: close-up ${win} centred ${dfmt(data.d_m, 2)} from ${a.name}`;
+    const surface = data.surface && data.surface.enabled ? data.surface : null;
+    drawPlot(svg, pts, {
+      d0: data.d0_m, d1: data.d1_m, masts, from: "a", surface, trees: Boolean(data.trees),
+    });
+    block.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (err) {
+    if (!pinProfileBlock(pin.id)) return;
+    title.textContent = `${pin.name}: close-up failed`;
+    if (readout) readout.textContent = err.message || String(err);
+  }
 }
 
 function svgX(svg, ev) {
@@ -975,8 +1134,9 @@ function stepDistance(plot, d, dir, steps) {
 }
 
 function addPin(svg, d) {
-  const pin = { id: nextPin, d, color: PIN_COLORS[nextPin % PIN_COLORS.length] };
+  const id = nextPin;
   nextPin += 1;
+  const pin = { id, d, color: PIN_COLORS[id % PIN_COLORS.length], name: `Z${id + 1}` };
   svg._measure.pins.push(pin);
   return pin;
 }
@@ -1036,12 +1196,20 @@ function setupMeasure(svg) {
     }
     ev.preventDefault();
   });
+  if (svg._measureClickBound) return;
+  svg._measureClickBound = true;
   const readout = readoutFor(svg);
   if (readout) {
     readout.addEventListener("click", (ev) => {
       const remove = ev.target.closest(".pin-remove");
       if (remove && ready()) {
         removePin(svg, Number(remove.dataset.pin));
+        return;
+      }
+      const profile = ev.target.closest(".pin-profile");
+      if (profile && ready()) {
+        const found = findPin(Number(profile.dataset.pin));
+        if (found) showPinProfile(found.pin);
         return;
       }
       const gps = ev.target.closest(".gps-copy");
@@ -1112,7 +1280,7 @@ async function submit(ev) {
       showError(data.error, data.field);
       return;
     }
-    showResult(data.result, request.options.units, picks, feedHeights);
+    showResult(data.result, request.options.units, picks, feedHeights, request);
   } catch (err) {
     showError(err.message || String(err));
   } finally {

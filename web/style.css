@@ -53,8 +53,10 @@ input.invalid { border-color: var(--blocked); background: #fff5f5; }
 .mode-tabs button { border: none; background: none; padding: 7px 16px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .mode-tabs button + button { border-left: 1px solid var(--line); }
 .mode-tabs button.active { background: var(--accent); color: #fff; }
-.map-views { margin-bottom: 8px; max-width: 100%; flex-wrap: wrap; }
+.map-views { display: inline-flex; margin-bottom: 8px; max-width: 100%; flex-wrap: wrap; overflow: visible; }
 .map-views button { max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-views button[data-pin] { font-weight: 600; }
+.map-views button[data-pin].active { background: var(--pin-color, var(--accent)); }
 .mode-bar .linkish { margin-top: 0; }
 #copy-status { font-size: 0.82rem; color: var(--clear); }
 input.overridden:not([type=checkbox]), select.overridden { border-color: var(--marginal); background: #fff6e5; }
@@ -165,8 +167,17 @@ button[type=submit]:disabled { opacity: 0.6; cursor: wait; }
 .measure-entry.hover { border-left-style: dashed; border-left-color: #c9a000; }
 .pin-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
 .pin-swatch.hover { background: #ffd43b; box-shadow: inset 0 0 0 1px #1d232b; }
+.pin-name { margin-right: 4px; }
 .pin-remove { float: right; border: none; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0 4px; cursor: pointer; }
 .pin-remove:hover { color: var(--blocked); }
+.pin-profile {
+  float: right; border: 1px solid var(--line); background: var(--card); color: var(--accent);
+  font: inherit; font-size: 0.78rem; line-height: 1; padding: 2px 7px; margin: 0 6px 0 0;
+  border-radius: 4px; cursor: pointer;
+}
+.pin-profile:hover, .pin-profile:focus-visible { border-color: var(--accent); color: var(--ink); }
+.pin-profile-block { border-left: 3px solid var(--pin-color, var(--line)); padding-left: 8px; margin: 8px 0 12px; }
+.pin-profile-block .plot-title { margin-top: 8px; }
 .gps-copy {
   background: none; border: none; color: var(--accent); padding: 0; margin: 0;
   cursor: pointer; font: inherit; text-decoration: underline; text-underline-offset: 2px;
