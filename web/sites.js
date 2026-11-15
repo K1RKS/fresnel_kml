@@ -11,16 +11,36 @@ const MAX_MATCHES = 20;
 const STALE_DAYS = 7;  // Nodographer keeps a node it can no longer reach for up to 30 days
 const SITE_KEYS = ["site_a", "site_b"];
 const STORE_KEY = "fresnelkml.sites";
-const TRACKED = ["name", "lat", "lon", "height_m", "height_ref", "ground_m", "tx_power_dbm", "noise_dbm"];
-const FIELD_INPUT = { height_m: "height", ground_m: "ground", tx_power_dbm: "tx_power", noise_dbm: "noise" };
+const TRACKED = ["name", "lat", "lon", "height_m", "height_ref", "ground_m", "tx_power_dbm", "noise_dbm",
+  "antenna_pattern"];
+const FIELD_INPUT = { height_m: "height", ground_m: "ground", tx_power_dbm: "tx_power", noise_dbm: "noise",
+  antenna_pattern: "antenna_pattern" };
 const FIELD_LABELS = { name: "name", lat: "latitude", lon: "longitude", height_m: "height",
   height_ref: "height reference", ground_m: "ground elevation",
-  tx_power_dbm: "TX power", noise_dbm: "noise floor" };
+  tx_power_dbm: "TX power", noise_dbm: "noise floor", antenna_pattern: "antenna" };
 const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref",
-  gnd: "ground_m", tx: "tx_power_dbm", n: "noise_dbm" };
+  gnd: "ground_m", tx: "tx_power_dbm", n: "noise_dbm", ant: "antenna_pattern" };
 const DEFAULT_TX_POWER_DBM = 27;
 const DEFAULT_NOISE_DBM = -95;
-const RF_FALLBACK = { tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM };
+const DEFAULT_ANTENNA_PATTERN = "omni-6";
+// Mirror of fresnelkml/antennas.py — 5.8 GHz Wi‑Fi / AREDN patterns for SNR gain.
+const ANTENNA_PATTERNS = [
+  { id: "omni-2", label: "Omni 2 dBi (stock / rubber duck)", gain_dbi: 2, beamwidth_deg: 360 },
+  { id: "omni-6", label: "Omni 6 dBi", gain_dbi: 6, beamwidth_deg: 360 },
+  { id: "omni-10", label: "Omni 10 dBi (e.g. Ubiquiti AMO-5G10)", gain_dbi: 10, beamwidth_deg: 360 },
+  { id: "omni-13", label: "Omni 13 dBi (e.g. Ubiquiti AMO-5G13)", gain_dbi: 13, beamwidth_deg: 360 },
+  { id: "sector-16", label: "Sector 16 dBi / ~120\u00b0", gain_dbi: 16, beamwidth_deg: 120 },
+  { id: "sector-19", label: "Sector 19 dBi / ~120\u00b0", gain_dbi: 19, beamwidth_deg: 120 },
+  { id: "panel-16", label: "Panel / NanoStation ~16 dBi", gain_dbi: 16, beamwidth_deg: 40 },
+  { id: "dish-19", label: "Dish / NanoBeam ~19 dBi", gain_dbi: 19, beamwidth_deg: 30 },
+  { id: "dish-24", label: "Dish / MikroTik LHG 24 dBi", gain_dbi: 24, beamwidth_deg: 7 },
+  { id: "dish-25", label: "Dish 25 dBi", gain_dbi: 25, beamwidth_deg: 8 },
+  { id: "dish-27", label: "Dish / MikroTik LHG XL 27 dBi", gain_dbi: 27, beamwidth_deg: 7 },
+  { id: "dish-30", label: "Dish / RocketDish 30 dBi", gain_dbi: 30, beamwidth_deg: 5 },
+  { id: "dish-34", label: "Dish / RocketDish 34 dBi", gain_dbi: 34, beamwidth_deg: 3 },
+];
+const RF_FALLBACK = { tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM,
+  antenna_pattern: DEFAULT_ANTENNA_PATTERN };
 // Tree inputs, kept as typed: they are in the page's height units, which are saved alongside.
 const TREE_FIELDS = { th: "tree_height", ta: "tree_clearance_a", tb: "tree_clearance_b", tw: "lidar_width" };
 const TREE_MODES = ["none", "trees", "lidar"];
@@ -64,7 +84,81 @@ function toDisplay(metres) {
 }
 
 function fieldEl(fs, name) {
-  return name === "height_ref" ? $("select[name=height_ref]", fs) : $(`input[name=${FIELD_INPUT[name] || name}]`, fs);
+  if (name === "height_ref" || name === "antenna_pattern") {
+    return $(`select[name=${FIELD_INPUT[name] || name}]`, fs);
+  }
+  return $(`input[name=${FIELD_INPUT[name] || name}]`, fs);
+}
+
+function patternById(id) {
+  return ANTENNA_PATTERNS.find((p) => p.id === id) || ANTENNA_PATTERNS.find((p) => p.id === DEFAULT_ANTENNA_PATTERN);
+}
+
+function matchAntennaPattern(gainDbi, beamwidthDeg) {
+  let best = ANTENNA_PATTERNS[0], bestKey = [Infinity, Infinity];
+  for (const p of ANTENNA_PATTERNS) {
+    const dg = Math.abs(p.gain_dbi - gainDbi);
+    const db = beamwidthDeg === null || beamwidthDeg === undefined
+      ? 0 : Math.abs(p.beamwidth_deg - beamwidthDeg);
+    const key = [dg, db];
+    if (key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) {
+      best = p;
+      bestKey = key;
+    }
+  }
+  return { pattern: best, delta: bestKey[0] };
+}
+
+function customAntennaId(gainDbi, beamwidthDeg) {
+  const bw = beamwidthDeg === null || beamwidthDeg === undefined || beamwidthDeg === ""
+    ? "" : Number(beamwidthDeg);
+  return `custom:${Number(gainDbi)}:${bw}`;
+}
+
+function parseCustomAntennaId(id) {
+  if (!id || !String(id).startsWith("custom:")) return null;
+  const parts = String(id).split(":");
+  const gain = Number(parts[1]);
+  if (!Number.isFinite(gain)) return null;
+  const bw = parts[2] === "" || parts[2] === undefined ? 360 : Number(parts[2]);
+  return {
+    id,
+    label: `From node (${gain} dBi)`,
+    gain_dbi: gain,
+    beamwidth_deg: Number.isFinite(bw) ? bw : 360,
+  };
+}
+
+function antennaChoice(id) {
+  return parseCustomAntennaId(id) || patternById(id);
+}
+
+function fillAntennaSelect(fs, extra) {
+  const sel = $("select[name=antenna_pattern]", fs);
+  if (!sel) return;
+  const current = sel.value;
+  const extras = [];
+  if (extra) extras.push(extra);
+  if (current && current.startsWith("custom:") && (!extra || extra.id !== current)) {
+    const parsed = parseCustomAntennaId(current);
+    if (parsed) extras.push(parsed);
+  }
+  const opts = ANTENNA_PATTERNS.map((p) =>
+    `<option value="${esc(p.id)}" data-gain="${p.gain_dbi}" data-bw="${p.beamwidth_deg}">${esc(p.label)}</option>`);
+  for (const p of extras) {
+    opts.push(`<option value="${esc(p.id)}" data-gain="${p.gain_dbi}" data-bw="${p.beamwidth_deg}">${esc(p.label)}</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+  else if (extra) sel.value = extra.id;
+  else sel.value = DEFAULT_ANTENNA_PATTERN;
+}
+
+function antennaPatternForNode(node) {
+  if (!node || node.gain_dbi === null || node.gain_dbi === undefined) return DEFAULT_ANTENNA_PATTERN;
+  const { pattern, delta } = matchAntennaPattern(node.gain_dbi, node.beamwidth_deg);
+  if (delta <= 0.5) return pattern.id;
+  return customAntennaId(node.gain_dbi, node.beamwidth_deg);
 }
 
 function linkNoiseFor(key) {
@@ -88,6 +182,7 @@ function nodeDefaults(node, key) {
     tx_power_dbm: node.tx_power_dbm !== null && node.tx_power_dbm !== undefined
       ? node.tx_power_dbm : DEFAULT_TX_POWER_DBM,
     noise_dbm: noise,
+    antenna_pattern: antennaPatternForNode(node),
   };
 }
 
@@ -109,7 +204,12 @@ function writeField(fs, name, value) {
   const el = fieldEl(fs, name);
   if (name === "height_m" || name === "ground_m") el.value = value === null || value === undefined ? "" : toDisplay(value);
   else if (name === "height_ref") el.value = value === "asl" ? "asl" : "agl";
-  else if (name === "tx_power_dbm" || name === "noise_dbm") {
+  else if (name === "antenna_pattern") {
+    const id = value || DEFAULT_ANTENNA_PATTERN;
+    const custom = parseCustomAntennaId(id);
+    fillAntennaSelect(fs, custom);
+    el.value = [...el.options].some((o) => o.value === id) ? id : DEFAULT_ANTENNA_PATTERN;
+  } else if (name === "tx_power_dbm" || name === "noise_dbm") {
     el.value = value === null || value === undefined ? "" : String(Number(value));
   } else el.value = value ?? "";
 }
@@ -128,6 +228,10 @@ function describeValue(name, value) {
   if (name === "height_m" || name === "ground_m") return `${toDisplay(value)} ${pageUnits()}`;
   if (name === "height_ref") return value === "asl" ? "above sea level" : "above ground";
   if (name === "tx_power_dbm" || name === "noise_dbm") return `${Number(value)} dBm`;
+  if (name === "antenna_pattern") {
+    const p = antennaChoice(value);
+    return p ? p.label : value;
+  }
   return value;
 }
 
@@ -388,7 +492,8 @@ function unmappedNote(link) {
 // when the link data has it, its position; the user enters the rest.
 function pickUnmappedLink(link) {
   const ov = { name: link.name || link.id, height_ref: "agl",
-    tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM };
+    tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM,
+    antenna_pattern: DEFAULT_ANTENNA_PATTERN };
   if (linkPlaced(link)) {
     ov.lat = link.lat.toFixed(7);
     ov.lon = link.lon.toFixed(7);
@@ -433,7 +538,7 @@ function unitsChanged() {
 function setupTracking(key) {
   const fs = siteFieldset(key);
   const tracked = (el) => ["name", "lat", "lon", "position", "height", "height_ref", "ground",
-    "tx_power", "noise"].includes(el.name);
+    "tx_power", "noise", "antenna_pattern"].includes(el.name);
   fs.addEventListener("input", (ev) => { if (tracked(ev.target)) syncOverrides(key); });
   fs.addEventListener("change", (ev) => {
     if (!tracked(ev.target)) return;
@@ -893,6 +998,7 @@ async function loadNodes() {
 
 function initSites() {
   SITE_KEYS.forEach((key) => {
+    fillAntennaSelect(siteFieldset(key));
     setupPicker(key);
     setupTracking(key);
   });

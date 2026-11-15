@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .antennas import default_gain_dbi
+
 DEFAULT_TX_POWER_DBM = 27.0
 DEFAULT_NOISE_DBM = -95.0
-DEFAULT_GAIN_DBI = 0.0
+DEFAULT_GAIN_DBI = default_gain_dbi()  # Omni 6 dBi when gain is omitted
 MIN_NOISE_DBM = -120.0
 MAX_NOISE_DBM = -50.0
 MIN_TX_POWER_DBM = 0.0
@@ -43,12 +45,15 @@ def is_directional(beamwidth_deg: float | None) -> bool:
 
 
 def effective_gain_dbi(gain_dbi: float | None, beamwidth_deg: float | None,
-                      az_off_deg: float | None, el_off_deg: float | None) -> tuple[float, list[str]]:
-    """Boresight gain reduced by a simple Gaussian pattern from beamwidth and aim offsets."""
+                      az_off_deg: float | None, el_off_deg: float | None, *,
+                      assume_aligned: bool = False) -> tuple[float, list[str]]:
+    """Boresight gain, optionally reduced by a simple Gaussian pattern from aim offsets."""
     notes: list[str] = []
     g0 = DEFAULT_GAIN_DBI if gain_dbi is None else float(gain_dbi)
     if gain_dbi is None:
-        notes.append("gain defaulted to 0 dBi")
+        notes.append(f"gain defaulted to {DEFAULT_GAIN_DBI:g} dBi (omni)")
+    if assume_aligned:
+        return g0, notes
     if not is_directional(beamwidth_deg):
         return g0, notes
     bw = float(beamwidth_deg)
@@ -94,17 +99,22 @@ def direction_snr(*, tx_power_dbm: float, rx_noise_dbm: float,
                   bearing_tx: float, bearing_rx: float,
                   tilt_tx: float, tilt_rx: float,
                   distance_m: float, freq_hz: float,
-                  clearance: float | None) -> dict[str, Any]:
+                  clearance: float | None,
+                  assume_aligned: bool = True) -> dict[str, Any]:
     """One-way link budget: optimal (clear Fresnel) and estimated (with obstruction loss)."""
     assumptions: list[str] = []
-    az_tx = azimuth_offset_deg(azimuth_tx, bearing_tx)
-    az_rx = azimuth_offset_deg(azimuth_rx, bearing_rx)
-    el_tx = elevation_offset_deg(elevation_tx, tilt_tx)
-    el_rx = elevation_offset_deg(elevation_rx, tilt_rx)
-    g_tx, n_tx = effective_gain_dbi(gain_tx_dbi, beamwidth_tx, az_tx, el_tx)
-    g_rx, n_rx = effective_gain_dbi(gain_rx_dbi, beamwidth_rx, az_rx, el_rx)
+    az_tx = None if assume_aligned else azimuth_offset_deg(azimuth_tx, bearing_tx)
+    az_rx = None if assume_aligned else azimuth_offset_deg(azimuth_rx, bearing_rx)
+    el_tx = None if assume_aligned else elevation_offset_deg(elevation_tx, tilt_tx)
+    el_rx = None if assume_aligned else elevation_offset_deg(elevation_rx, tilt_rx)
+    g_tx, n_tx = effective_gain_dbi(gain_tx_dbi, beamwidth_tx, az_tx, el_tx,
+                                   assume_aligned=assume_aligned)
+    g_rx, n_rx = effective_gain_dbi(gain_rx_dbi, beamwidth_rx, az_rx, el_rx,
+                                   assume_aligned=assume_aligned)
     assumptions.extend(f"TX {n}" for n in n_tx)
     assumptions.extend(f"RX {n}" for n in n_rx)
+    if assume_aligned:
+        assumptions.append("aim assumed on boresight")
 
     fspl = fspl_db(distance_m, freq_hz)
     obst = knife_edge_loss_db(clearance)
@@ -134,7 +144,7 @@ def direction_snr(*, tx_power_dbm: float, rx_noise_dbm: float,
 
 def link_snr(site_a, site_b, *, distance_m: float, freq_hz: float,
              bearing_ab: float, bearing_ba: float, tilt_ab: float, tilt_ba: float,
-             clearance: float | None) -> dict[str, Any]:
+             clearance: float | None, assume_aligned: bool = True) -> dict[str, Any]:
     """Bidirectional SNR from two Site objects (RF fields optional; defaults applied)."""
     def power(site) -> float:
         v = getattr(site, "tx_power_dbm", None)
@@ -144,7 +154,8 @@ def link_snr(site_a, site_b, *, distance_m: float, freq_hz: float,
         v = getattr(site, "noise_dbm", None)
         return DEFAULT_NOISE_DBM if v is None else float(v)
 
-    common = dict(distance_m=distance_m, freq_hz=freq_hz, clearance=clearance)
+    common = dict(distance_m=distance_m, freq_hz=freq_hz, clearance=clearance,
+                  assume_aligned=assume_aligned)
     ab = direction_snr(
         tx_power_dbm=power(site_a), rx_noise_dbm=noise(site_b),
         gain_tx_dbi=site_a.gain_dbi, gain_rx_dbi=site_b.gain_dbi,

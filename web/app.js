@@ -249,10 +249,15 @@ function readSite(key) {
   const noise = $("input[name=noise]", fs).value.trim();
   if (tx !== "" && Number.isFinite(Number(tx))) site.tx_power_dbm = Number(tx);
   if (noise !== "" && Number.isFinite(Number(noise))) site.noise_dbm = Number(noise);
+  const antSel = $("select[name=antenna_pattern]", fs);
+  const ant = typeof antennaChoice === "function" ? antennaChoice(antSel ? antSel.value : null) : null;
+  if (ant) {
+    site.gain_dbi = ant.gain_dbi;
+    site.beamwidth_deg = ant.beamwidth_deg;
+  }
   const node = typeof pickedNode === "function" ? pickedNode(key) : null;
   if (node) {
-    for (const [from, to] of [["gain_dbi", "gain_dbi"], ["azimuth_deg", "azimuth_deg"],
-      ["elevation_deg", "elevation_deg"], ["beamwidth_deg", "beamwidth_deg"]]) {
+    for (const [from, to] of [["azimuth_deg", "azimuth_deg"], ["elevation_deg", "elevation_deg"]]) {
       if (node[from] !== null && node[from] !== undefined) site[to] = node[from];
     }
   }

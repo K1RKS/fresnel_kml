@@ -3,7 +3,9 @@ import math
 import pytest
 
 from fresnelkml.analysis import Site, analyze
+from fresnelkml.antennas import DEFAULT_PATTERN_ID, default_gain_dbi, match_pattern, pattern_by_id
 from fresnelkml.link_budget import (
+    DEFAULT_GAIN_DBI,
     clearance_to_nu,
     direction_snr,
     effective_gain_dbi,
@@ -20,13 +22,25 @@ def test_fspl_10km_5_8ghz():
     assert fspl_db(10_000, 5.8e9) == pytest.approx(expected, abs=0.05)
 
 
+def test_antenna_catalog_default():
+    assert DEFAULT_PATTERN_ID == "omni-6"
+    assert default_gain_dbi() == 6.0
+    assert DEFAULT_GAIN_DBI == 6.0
+    assert pattern_by_id("omni-6")["gain_dbi"] == 6.0
+    assert match_pattern(19.0, 30.0)["id"] == "dish-19"
+    assert match_pattern(6.0)["id"] == "omni-6"
+
+
 def test_effective_gain_omni_and_boresight():
     g, notes = effective_gain_dbi(None, None, None, None)
-    assert g == 0.0 and "0 dBi" in notes[0]
+    assert g == 6.0 and "6 dBi" in notes[0] and "omni" in notes[0]
     g, _ = effective_gain_dbi(25.0, 360, 90, 10)
     assert g == 25.0
     g, _ = effective_gain_dbi(25.0, 8.0, 0.0, 0.0)
     assert g == 25.0
+    # Aligned path ignores aim offsets and uses full gain.
+    g, notes = effective_gain_dbi(25.0, 8.0, 40.0, 10.0, assume_aligned=True)
+    assert g == 25.0 and notes == []
 
 
 def test_effective_gain_off_boresight():
@@ -64,6 +78,9 @@ def test_direction_asymmetric():
         distance_m=10_000, freq_hz=5.8e9, clearance=0.8)
     assert d["estimated_snr_db"] == d["optimal_snr_db"]
     assert d["obstruction_loss_db"] == 0.0
+    # Default assume_aligned uses full boresight gains despite azimuth offset.
+    assert d["gain_tx_dbi"] == 10.0 and d["gain_rx_dbi"] == 25.0
+    assert "aim assumed on boresight" in d["assumptions"]
     blocked = direction_snr(
         tx_power_dbm=27, rx_noise_dbm=-95,
         gain_tx_dbi=10, gain_rx_dbi=25,
@@ -86,6 +103,17 @@ def test_link_snr_both_ways():
     assert out["ba"]["tx_power_dbm"] == 20 and out["ba"]["noise_dbm"] == -90
     assert out["ab"]["estimated_snr_db"] is None
     assert out["ab"]["optimal_snr_db"] is not None
+    assert out["ab"]["gain_tx_dbi"] == 5.0 and out["ab"]["gain_rx_dbi"] == 20.0
+
+
+def test_link_snr_defaults_omni_gain():
+    a = Site("A", 45.0, -122.0, asl_m=100)
+    b = Site("B", 45.1, -122.0, asl_m=120)
+    out = link_snr(a, b, distance_m=11_000, freq_hz=5.8e9,
+                   bearing_ab=0, bearing_ba=180, tilt_ab=0, tilt_ba=0, clearance=None)
+    assert out["ab"]["gain_tx_dbi"] == 6.0 and out["ab"]["gain_rx_dbi"] == 6.0
+    assert any("6 dBi" in n for n in out["ab"]["assumptions"])
+    assert "aim assumed on boresight" in out["ab"]["assumptions"]
 
 
 def test_analyze_includes_snr(local_config):
