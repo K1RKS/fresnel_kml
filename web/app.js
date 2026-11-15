@@ -818,6 +818,8 @@ function readoutEntry(plot, m, pin) {
   const swatch = pin ? `<span class="pin-swatch" style="background:${pin.color}"></span>` : '<span class="pin-swatch hover"></span>';
   const remove = pin ? `<button type="button" class="pin-remove" data-pin="${pin.id}" title="Remove this marker" aria-label="Remove this marker">&times;</button>` : "";
   const lines = [`${remove}${swatch}<strong>${plot.from === "b" ? `${to}</strong> (${from})` : `${from}</strong> (${to})`}`];
+  const ll = latLonAt(plot, m.d);
+  if (ll) lines.push(`GPS: ${ll[0].toFixed(7)}, ${ll[1].toFixed(7)}`);
   if (hasValue(m.ground)) {
     lines.push(`Ground to Fresnel zone bottom: ${gapHtml(m.zone - m.ground, "into the zone")}`
       + ` &middot; to the 60% line: ${gapHtml(m.sixty - m.ground, "past the 60% line")}`);
