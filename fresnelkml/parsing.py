@@ -11,7 +11,9 @@ from .analysis import Options, Site
 from .coords import LAT, LON, CoordinateError, parse_coordinate, parse_position
 from .units import FEET
 
-SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m"}
+SITE_KEYS = {"name", "lat", "lon", "position", "agl_m", "asl_m", "ground_m",
+             "tx_power_dbm", "noise_dbm", "gain_dbi", "azimuth_deg", "elevation_deg", "beamwidth_deg"}
+RF_SITE_KEYS = ("tx_power_dbm", "noise_dbm", "gain_dbi", "azimuth_deg", "elevation_deg", "beamwidth_deg")
 REQUEST_KEYS = {"site_a", "site_b", "options", "format", "progress"}
 OPTION_KEYS = {f.name for f in fields(Options)} | {"units", "tree_clearance_m"}
 IGNORED_OPTION_KEYS = {"google_key"}
@@ -116,7 +118,11 @@ def parse_site_dict(data, where: str, units: str = "m") -> tuple[Site, list[str]
     if ("agl_m" in heights) == ("asl_m" in heights):
         raise RequestError(f"{where} needs exactly one of agl_m (above ground) or asl_m (above sea level).",
                            f"{where}.agl_m")
-    site = Site(name=name.strip(), lat=lat, lon=lon, position_format=fmt, **heights)
+    rf = {}
+    for key in RF_SITE_KEYS:
+        if data.get(key) is not None:
+            rf[key] = _number(data[key], f"{where}.{key}")
+    site = Site(name=name.strip(), lat=lat, lon=lon, position_format=fmt, **heights, **rf)
     return site, [f"{site.name}: {w}" for w in warnings]
 
 

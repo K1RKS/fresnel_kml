@@ -43,6 +43,38 @@ def test_json_response_with_terrain(local_config):
     assert r["elevation_sources"] == ["local"]
     assert len(r["profile"]) == 65
     assert "<kml" in data["kml"]
+    assert r["snr"]["ab"]["optimal_snr_db"] is not None
+    assert r["snr"]["ba"]["optimal_snr_db"] is not None
+    assert r["snr"]["ab"]["estimated_snr_db"] is not None
+
+
+def test_json_snr_with_rf_fields(local_config):
+    payload = body(
+        format="json",
+        options={"terrain_check": False, "color": "#112233"},
+        site_a={"name": "A", "lat": 37.0, "lon": -122.0, "asl_m": 150,
+                "tx_power_dbm": 30, "noise_dbm": -90, "gain_dbi": 10, "beamwidth_deg": 360},
+        site_b={"name": "B", "lat": 37.05, "lon": -122.0, "asl_m": 180,
+                "tx_power_dbm": 20, "noise_dbm": -100, "gain_dbi": 25, "azimuth_deg": 180,
+                "beamwidth_deg": 8},
+    )
+    resp = handle_request("POST", "", payload, env={"FRESNEL_CONFIG": local_config})
+    assert resp.status == 200
+    snr = json.loads(resp.body)["report"]["snr"]
+    assert snr["ab"]["tx_power_dbm"] == 30 and snr["ab"]["noise_dbm"] == -100
+    assert snr["ba"]["tx_power_dbm"] == 20 and snr["ba"]["noise_dbm"] == -90
+    assert snr["ab"]["estimated_snr_db"] is None  # no terrain clearance
+    assert "Link SNR" in json.loads(resp.body)["kml"] or "optimal" in json.loads(resp.body)["kml"]
+
+
+@pytest.mark.parametrize("payload,field", [
+    (body(site_a={"name": "A", "lat": 37, "lon": -122, "asl_m": 1, "tx_power_dbm": 99}), "site_a.tx_power_dbm"),
+    (body(site_a={"name": "A", "lat": 37, "lon": -122, "asl_m": 1, "noise_dbm": -130}), "site_a.noise_dbm"),
+])
+def test_bad_rf_input_400(payload, field):
+    resp = handle_request("POST", "", payload, env={})
+    assert resp.status == 400
+    assert json.loads(resp.body)["field"] == field
 
 
 @pytest.mark.parametrize("payload,field", [

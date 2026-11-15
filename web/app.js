@@ -169,6 +169,38 @@ function aimRow(r, picks) {
   return lines.length ? ["Antenna aim", lines.join("<br>")] : null;
 }
 
+function snrRows(r) {
+  const snr = r.snr;
+  if (!snr) return [];
+  const rows = [];
+  for (const [key, label] of [["ab", "A\u2192B"], ["ba", "B\u2192A"]]) {
+    const d = snr[key];
+    if (!d || d.optimal_snr_db === null || d.optimal_snr_db === undefined) continue;
+    let text = `optimal ${d.optimal_snr_db.toFixed(1)} dB`;
+    if (d.estimated_snr_db !== null && d.estimated_snr_db !== undefined) {
+      text += ` / estimated ${d.estimated_snr_db.toFixed(1)} dB`;
+    } else {
+      text += ` <small>(estimated n/a; needs terrain clearance)</small>`;
+    }
+    const bits = [];
+    if (d.fspl_db !== null && d.fspl_db !== undefined) bits.push(`FSPL ${d.fspl_db.toFixed(1)} dB`);
+    if (d.obstruction_loss_db !== null && d.obstruction_loss_db !== undefined) {
+      bits.push(`obstruction ${d.obstruction_loss_db.toFixed(1)} dB`);
+    }
+    if (d.tx_power_dbm !== null && d.tx_power_dbm !== undefined) bits.push(`TX ${d.tx_power_dbm.toFixed(0)} dBm`);
+    if (d.noise_dbm !== null && d.noise_dbm !== undefined) bits.push(`noise ${d.noise_dbm.toFixed(0)} dBm`);
+    if (d.gain_tx_dbi !== null && d.gain_tx_dbi !== undefined && d.gain_rx_dbi !== null && d.gain_rx_dbi !== undefined) {
+      bits.push(`gains ${d.gain_tx_dbi.toFixed(1)}/${d.gain_rx_dbi.toFixed(1)} dBi`);
+    }
+    if (bits.length) text += `<br><small>${bits.join(", ")}</small>`;
+    if (d.assumptions && d.assumptions.length) {
+      text += `<br><small>${d.assumptions.map(esc).join("; ")}</small>`;
+    }
+    rows.push([`Link SNR ${label}`, text]);
+  }
+  return rows;
+}
+
 // Positive degrees are up from the local horizon, along the straight line to the other antenna.
 function tiltPhrase(deg) {
   const shown = Math.abs(deg).toFixed(2);
@@ -211,6 +243,17 @@ function readSite(key) {
   site[ref === "asl" ? "asl_m" : "agl_m"] = height === "" ? null : Number(height);
   const ground = $("input[name=ground]", fs).value.trim();
   if (ref === "agl" && ground !== "") site.ground_m = Number(ground);
+  const tx = $("input[name=tx_power]", fs).value.trim();
+  const noise = $("input[name=noise]", fs).value.trim();
+  if (tx !== "" && Number.isFinite(Number(tx))) site.tx_power_dbm = Number(tx);
+  if (noise !== "" && Number.isFinite(Number(noise))) site.noise_dbm = Number(noise);
+  const node = typeof pickedNode === "function" ? pickedNode(key) : null;
+  if (node) {
+    for (const [from, to] of [["gain_dbi", "gain_dbi"], ["azimuth_deg", "azimuth_deg"],
+      ["elevation_deg", "elevation_deg"], ["beamwidth_deg", "beamwidth_deg"]]) {
+      if (node[from] !== null && node[from] !== undefined) site[to] = node[from];
+    }
+  }
   return site;
 }
 
@@ -277,7 +320,8 @@ function showError(message, field) {
     const [site, name] = field.split(".");
     const fs = siteFieldset(site);
     if (fs) {
-      const input = $(`input[name=${{ agl_m: "height", asl_m: "height", ground_m: "ground" }[name] || name}]`, fs);
+      const input = $(`input[name=${{ agl_m: "height", asl_m: "height", ground_m: "ground",
+        tx_power_dbm: "tx_power", noise_dbm: "noise" }[name] || name}]`, fs);
       if (input) {
         input.classList.add("invalid");
         input.focus();
@@ -343,6 +387,7 @@ function showResult(data, units, picks = [], feedHeights = []) {
   rows.push(tiltRow(r, picks));
   const aim = aimRow(r, picks);
   if (aim) rows.push(aim);
+  for (const row of snrRows(r)) rows.push(row);
   rows.push(["Max r1 / 0.6\u00b7r1", `${hfmt(r.r1_max_m, 2)} / ${hfmt(r.r60_max_m, 2)}`]);
   if (r.zone !== 1) rows.push([`Max r${r.zone}`, hfmt(r.zone_max_m, 2)]);
   if (r.terrain_checked) {

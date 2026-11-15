@@ -98,6 +98,17 @@ def _link_description(report: LinkReport) -> str:
         f"Bearing A\u2192B: {report.bearing_ab:.1f}\u00b0, B\u2192A: {report.bearing_ba:.1f}\u00b0",
         f"Tilt A\u2192B: {fmt_tilt(report.tilt_ab)}, B\u2192A: {fmt_tilt(report.tilt_ba)}",
     ]
+    if report.snr:
+        for key, label in (("ab", "A\u2192B"), ("ba", "B\u2192A")):
+            d = report.snr.get(key) or {}
+            opt_s = d.get("optimal_snr_db")
+            est = d.get("estimated_snr_db")
+            if opt_s is None:
+                continue
+            text = f"Link SNR {label}: optimal {opt_s:.1f} dB"
+            text += (f", estimated {est:.1f} dB" if est is not None
+                     else " (estimated n/a; needs terrain clearance)")
+            lines.append(text)
     if opt.zone != 1:
         lines.append(f"Max r{opt.zone}: {fmt_height(report.zone_max_m, u, 2)}")
     lines += [

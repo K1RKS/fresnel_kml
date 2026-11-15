@@ -49,6 +49,27 @@ def _slim_link(link) -> dict | None:
             "lat": lat, "lon": lon}
 
 
+def _tx_power_dbm(meshrf: dict, data: dict) -> float | None:
+    """AREDN/Nodographer may expose TX power under several keys; accept numeric strings too."""
+    for source in (meshrf, data, data.get("antenna") if isinstance(data.get("antenna"), dict) else {}):
+        if not isinstance(source, dict):
+            continue
+        for key in ("txpower", "tx_power", "tx_power_dbm"):
+            v = _num(source.get(key))
+            if v is not None:
+                return v
+    return None
+
+
+def _noise_dbm(meshrf: dict, data: dict) -> float | None:
+    for source in (meshrf, data):
+        for key in ("noise", "noise_dbm"):
+            v = _num(source.get(key))
+            if v is not None:
+                return v
+    return None
+
+
 def slim_node(data) -> dict | None:
     """The picker fields of one nodeInfo[i]["data"], or None when it has no id, name or usable position."""
     if not isinstance(data, dict) or not _text(data.get("id")) or not _text(data.get("node")):
@@ -71,6 +92,8 @@ def slim_node(data) -> dict | None:
         "antenna": _text(ant.get("description")),
         "freq_mhz": _num(meshrf.get("freq")) or None,
         "chanbw_mhz": _num(meshrf.get("chanbw")) or None,
+        "tx_power_dbm": _tx_power_dbm(meshrf, data),
+        "noise_dbm": _noise_dbm(meshrf, data),
         "band": str(data.get("band") or ""),
         "last_seen": _text(data.get("last_seen")),
         "links": [l for l in (_slim_link(x) for x in data.get("links") or []) if l],

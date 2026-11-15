@@ -8,10 +8,11 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from . import fresnel, geo
+from . import fresnel, geo, link_budget
 from .colors import ColorError, ZoneColor, parse_color
 from .coords import DISPLAY_FORMATS, format_position
 from .elevation import ElevationResult
+from .link_budget import MAX_NOISE_DBM, MAX_TX_POWER_DBM, MIN_NOISE_DBM, MIN_TX_POWER_DBM
 from .surface import (LATERAL_FRACTIONS, SurfacePoint, flown_text, flown_years, lateral_clearance,
                       lidar_stations, obstruction_markers, thin_for_plot, window_points)
 from .units import fmt_distance, fmt_height
@@ -46,6 +47,13 @@ class Site:
     ground_m: float | None = None
     asl_m: float | None = None
     position_format: str = "decimal"
+    # Optional RF fields for link-budget SNR (defaults applied in link_budget.link_snr).
+    tx_power_dbm: float | None = None
+    noise_dbm: float | None = None
+    gain_dbi: float | None = None
+    azimuth_deg: float | None = None
+    elevation_deg: float | None = None
+    beamwidth_deg: float | None = None
 
 
 @dataclass
@@ -157,6 +165,7 @@ class LinkReport:
     surface_status: str | None = None
     elevation_sources: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    snr: dict | None = None  # {"ab": {...}, "ba": {...}} from link_budget.link_snr
 
     @property
     def all_samples(self) -> list[ProfilePoint]:
@@ -270,6 +279,7 @@ class LinkReport:
             "profile_b": [_point_dict(p) for p in self.profile_b],
             "end_window_m": _r(self.end_window_m),
             "warnings": self.warnings,
+            "snr": self.snr,
         }
 
 
@@ -384,6 +394,24 @@ def validate_site(site: Site, label: str) -> None:
             raise AnalysisError(f"{label}.ground_m must be between -500 and 9000 m.", f"{label}.ground_m")
         if site.asl_m is not None and site.asl_m - site.ground_m < 0:
             raise AnalysisError(f"{label}.asl_m is below its ground_m.", f"{label}.asl_m")
+    if site.tx_power_dbm is not None and (not _finite(site.tx_power_dbm)
+                                          or not MIN_TX_POWER_DBM <= site.tx_power_dbm <= MAX_TX_POWER_DBM):
+        raise AnalysisError(f"{label}.tx_power_dbm must be between {MIN_TX_POWER_DBM:g} and "
+                            f"{MAX_TX_POWER_DBM:g} dBm.", f"{label}.tx_power_dbm")
+    if site.noise_dbm is not None and (not _finite(site.noise_dbm)
+                                       or not MIN_NOISE_DBM <= site.noise_dbm <= MAX_NOISE_DBM):
+        raise AnalysisError(f"{label}.noise_dbm must be between {MIN_NOISE_DBM:g} and "
+                            f"{MAX_NOISE_DBM:g} dBm.", f"{label}.noise_dbm")
+    if site.gain_dbi is not None and (not _finite(site.gain_dbi) or not -10 <= site.gain_dbi <= 50):
+        raise AnalysisError(f"{label}.gain_dbi must be between -10 and 50 dBi.", f"{label}.gain_dbi")
+    if site.azimuth_deg is not None and (not _finite(site.azimuth_deg) or not 0 <= site.azimuth_deg < 360):
+        raise AnalysisError(f"{label}.azimuth_deg must be in [0, 360).", f"{label}.azimuth_deg")
+    if site.elevation_deg is not None and (not _finite(site.elevation_deg)
+                                           or not -90 <= site.elevation_deg <= 90):
+        raise AnalysisError(f"{label}.elevation_deg must be between -90 and 90.", f"{label}.elevation_deg")
+    if site.beamwidth_deg is not None and (not _finite(site.beamwidth_deg)
+                                           or not 0 <= site.beamwidth_deg <= 360):
+        raise AnalysisError(f"{label}.beamwidth_deg must be between 0 and 360.", f"{label}.beamwidth_deg")
 
 
 class _ProfileLookup:
@@ -728,4 +756,14 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
     if opt.mode == "relative":
         warnings.append("Relative mode: towers follow Google Earth terrain, but the line of sight and the "
                         "Fresnel zone are still drawn at absolute altitudes.")
+
+    clearance = link_budget.worst_clearance(
+        report.min_clearance,
+        report.min_tree_clearance if report.trees_checked else None,
+        report.surface_worst.clearance if report.surface_checked and report.surface_worst else None,
+    )
+    report.snr = link_budget.link_snr(
+        site_a, site_b, distance_m=distance, freq_hz=report.freq_hz,
+        bearing_ab=bearing_ab, bearing_ba=bearing_ba, tilt_ab=tilt_ab, tilt_ba=tilt_ba,
+        clearance=clearance)
     return report

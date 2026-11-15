@@ -150,6 +150,17 @@ def summary(report: LinkReport) -> str:
         + (f", max r{opt.zone} {fmt_height(report.zone_max_m, u, 2)}" if opt.zone != 1 else ""),
         f"  Zone color {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",
     ]
+    if report.snr:
+        for key, label in (("ab", "A->B"), ("ba", "B->A")):
+            d = report.snr.get(key) or {}
+            opt_s = d.get("optimal_snr_db")
+            est = d.get("estimated_snr_db")
+            if opt_s is None:
+                continue
+            line = f"  Link SNR {label}: optimal {opt_s:.1f} dB"
+            line += (f", estimated {est:.1f} dB" if est is not None
+                     else " (estimated n/a; needs terrain clearance)")
+            lines.append(line)
     if report.terrain_checked:
         c = "n/a" if report.min_clearance is None else f"{report.min_clearance:.2f} x r1"
         if report.min_clearance_m is not None:

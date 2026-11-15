@@ -42,7 +42,7 @@ input:not([type=checkbox]):not([type=color]), select {
   min-width: 0;
 }
 input.invalid { border-color: var(--blocked); background: #fff5f5; }
-.pos-latlon, .height-row, .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.pos-latlon, .height-row, .rf-row, .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .decoded { font-size: 0.82rem; color: var(--muted); min-height: 1.2em; margin-top: 4px; }
 .decoded.bad { color: var(--blocked); }
 .hint { font-size: 0.85rem; color: var(--muted); margin: 8px 0 0; }

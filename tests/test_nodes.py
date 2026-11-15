@@ -60,6 +60,7 @@ def test_slim_node():
     assert (n["height_m"], n["azimuth_deg"], n["beamwidth_deg"], n["gain_dbi"]) == (25.0, 96.0, 8.0, 25.0)
     assert n["elevation_deg"] == 0.0 and n["antenna"] == "Ubiquiti RD-5G30"
     assert (n["freq_mhz"], n["chanbw_mhz"], n["band"]) == (5805.0, 10.0, "5.8 GHz")
+    assert n["tx_power_dbm"] is None and n["noise_dbm"] is None
     assert n["last_seen"] == "2026-11-13T17:38:20Z"
     assert n["links"] == [
         {"id": "parrett-sector", "name": "Parrett-Sector", "type": "RF", "distance_km": 9.8, "bearing_deg": 237.4,
@@ -72,6 +73,14 @@ def test_slim_node_without_optional_fields():
     n = slim_node(PARRETT)
     assert n["height_m"] == 12.0 and n["azimuth_deg"] is None and n["antenna"] is None
     assert n["chanbw_mhz"] is None and n["last_seen"] is None and n["links"] == []
+    assert n["tx_power_dbm"] is None and n["noise_dbm"] is None
+
+
+def test_slim_node_tx_power_and_noise_from_meshrf():
+    n = slim_node({**PARRETT, "meshrf": {"freq": 5805.0, "txpower": "27", "noise": "-92"}})
+    assert n["tx_power_dbm"] == 27.0 and n["noise_dbm"] == -92.0
+    n2 = slim_node({**PARRETT, "meshrf": {"freq": 5805.0, "tx_power": 25.5}, "noise_dbm": -97})
+    assert n2["tx_power_dbm"] == 25.5 and n2["noise_dbm"] == -97.0
 
 
 def test_link_without_position_fields():

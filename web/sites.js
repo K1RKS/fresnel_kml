@@ -11,11 +11,16 @@ const MAX_MATCHES = 20;
 const STALE_DAYS = 7;  // Nodographer keeps a node it can no longer reach for up to 30 days
 const SITE_KEYS = ["site_a", "site_b"];
 const STORE_KEY = "fresnelkml.sites";
-const TRACKED = ["name", "lat", "lon", "height_m", "height_ref", "ground_m"];
-const FIELD_INPUT = { height_m: "height", ground_m: "ground" };
+const TRACKED = ["name", "lat", "lon", "height_m", "height_ref", "ground_m", "tx_power_dbm", "noise_dbm"];
+const FIELD_INPUT = { height_m: "height", ground_m: "ground", tx_power_dbm: "tx_power", noise_dbm: "noise" };
 const FIELD_LABELS = { name: "name", lat: "latitude", lon: "longitude", height_m: "height",
-  height_ref: "height reference", ground_m: "ground elevation" };
-const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref", gnd: "ground_m" };
+  height_ref: "height reference", ground_m: "ground elevation",
+  tx_power_dbm: "TX power", noise_dbm: "noise floor" };
+const URL_FIELDS = { name: "name", lat: "lat", lon: "lon", pos: "pos", h: "height_m", ref: "height_ref",
+  gnd: "ground_m", tx: "tx_power_dbm", n: "noise_dbm" };
+const DEFAULT_TX_POWER_DBM = 27;
+const DEFAULT_NOISE_DBM = -95;
+const RF_FALLBACK = { tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM };
 // Tree inputs, kept as typed: they are in the page's height units, which are saved alongside.
 const TREE_FIELDS = { th: "tree_height", ta: "tree_clearance_a", tb: "tree_clearance_b", tw: "lidar_width" };
 const TREE_MODES = ["none", "trees", "lidar"];
@@ -62,7 +67,17 @@ function fieldEl(fs, name) {
   return name === "height_ref" ? $("select[name=height_ref]", fs) : $(`input[name=${FIELD_INPUT[name] || name}]`, fs);
 }
 
-function nodeDefaults(node) {
+function linkNoiseFor(key) {
+  if (key !== "site_b") return null;
+  const a = pickedNode("site_a");
+  const id = chosenLink();
+  const link = a && id && rfLinks(a).find((l) => l.id === id);
+  return link && link.noise_dbm !== null && link.noise_dbm !== undefined ? link.noise_dbm : null;
+}
+
+function nodeDefaults(node, key) {
+  const noise = node.noise_dbm !== null && node.noise_dbm !== undefined ? node.noise_dbm
+    : (linkNoiseFor(key) ?? DEFAULT_NOISE_DBM);
   return {
     name: node.name,
     lat: node.lat.toFixed(7),
@@ -70,6 +85,9 @@ function nodeDefaults(node) {
     height_m: hasHeight(node) ? node.height_m : null,
     height_ref: "agl",
     ground_m: null,
+    tx_power_dbm: node.tx_power_dbm !== null && node.tx_power_dbm !== undefined
+      ? node.tx_power_dbm : DEFAULT_TX_POWER_DBM,
+    noise_dbm: noise,
   };
 }
 
@@ -80,6 +98,10 @@ function readField(fs, name) {
     const v = Number(raw);
     return pageUnits() === "ft" ? v * FEET : v;
   }
+  if (name === "tx_power_dbm" || name === "noise_dbm") {
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : null;
+  }
   return raw;
 }
 
@@ -87,12 +109,15 @@ function writeField(fs, name, value) {
   const el = fieldEl(fs, name);
   if (name === "height_m" || name === "ground_m") el.value = value === null || value === undefined ? "" : toDisplay(value);
   else if (name === "height_ref") el.value = value === "asl" ? "asl" : "agl";
-  else el.value = value ?? "";
+  else if (name === "tx_power_dbm" || name === "noise_dbm") {
+    el.value = value === null || value === undefined ? "" : String(Number(value));
+  } else el.value = value ?? "";
 }
 
 function sameValue(name, a, b) {
   if (a === null || b === null) return a === b;
   if (name === "height_m" || name === "ground_m") return toDisplay(a) === toDisplay(b);
+  if (name === "tx_power_dbm" || name === "noise_dbm") return Number(a) === Number(b);
   if ((name === "lat" || name === "lon") && DECIMAL_RE.test(a) && DECIMAL_RE.test(b)) {
     return Math.abs(Number(a) - Number(b)) < 5e-8;
   }
@@ -102,6 +127,7 @@ function sameValue(name, a, b) {
 function describeValue(name, value) {
   if (name === "height_m" || name === "ground_m") return `${toDisplay(value)} ${pageUnits()}`;
   if (name === "height_ref") return value === "asl" ? "above sea level" : "above ground";
+  if (name === "tx_power_dbm" || name === "noise_dbm") return `${Number(value)} dBm`;
   return value;
 }
 
@@ -124,7 +150,7 @@ function syncOverrides(key) {
       if (pos) s.ov.pos = pos;
     }
   } else {
-    const d = nodeDefaults(node);
+    const d = nodeDefaults(node, key);
     for (const name of TRACKED) {
       const v = readField(fs, name);
       if (v === null || sameValue(name, v, d[name])) delete s.ov[name];
@@ -141,10 +167,11 @@ function restoreEmpty(key) {
   const node = pickedNode(key);
   if (!node) return;
   const fs = siteFieldset(key);
-  const d = nodeDefaults(node);
+  const d = nodeDefaults(node, key);
   for (const name of TRACKED) {
-    if (d[name] !== null && fieldEl(fs, name).value.trim() === "") {
-      writeField(fs, name, d[name]);
+    const fallback = d[name] !== null && d[name] !== undefined ? d[name] : RF_FALLBACK[name];
+    if (fallback !== null && fallback !== undefined && fieldEl(fs, name).value.trim() === "") {
+      writeField(fs, name, fallback);
       fieldEl(fs, name).classList.remove("invalid");
     }
   }
@@ -154,11 +181,11 @@ function refreshOverrides(key) {
   const fs = siteFieldset(key);
   const s = siteState.sites[key];
   const node = pickedNode(key);
-  const d = node ? nodeDefaults(node) : null;
+  const d = node ? nodeDefaults(node, key) : null;
   const changed = [];
   for (const name of TRACKED) {
     const el = fieldEl(fs, name);
-    const on = Boolean(d) && d[name] !== null && name in s.ov;
+    const on = Boolean(d) && d[name] !== null && d[name] !== undefined && name in s.ov;
     el.classList.toggle("overridden", on);
     if (on) {
       el.title = `Mesh node value: ${describeValue(name, d[name])}`;
@@ -214,9 +241,11 @@ function applySite(key) {
   } finally {
     applying = false;
   }
-  const d = node ? nodeDefaults(node) : {};
+  const d = node ? nodeDefaults(node, key) : {};
   for (const name of TRACKED) {
-    writeField(fs, name, name in s.ov ? s.ov[name] : (node ? d[name] : null));
+    let value = name in s.ov ? s.ov[name] : (node ? d[name] : null);
+    if ((value === null || value === undefined) && RF_FALLBACK[name] !== undefined) value = RF_FALLBACK[name];
+    writeField(fs, name, value);
     fieldEl(fs, name).classList.remove("invalid");
   }
   $("input[name=position]", fs).value = single ? s.ov.pos || "" : "";
@@ -358,11 +387,13 @@ function unmappedNote(link) {
 // A link to a node the feed has no record for: Site B gets its name, the link's frequency and,
 // when the link data has it, its position; the user enters the rest.
 function pickUnmappedLink(link) {
-  const ov = { name: link.name || link.id, height_ref: "agl" };
+  const ov = { name: link.name || link.id, height_ref: "agl",
+    tx_power_dbm: DEFAULT_TX_POWER_DBM, noise_dbm: DEFAULT_NOISE_DBM };
   if (linkPlaced(link)) {
     ov.lat = link.lat.toFixed(7);
     ov.lon = link.lon.toFixed(7);
   }
+  if (link.noise_dbm !== null && link.noise_dbm !== undefined) ov.noise_dbm = link.noise_dbm;
   siteState.sites.site_b = { node: null, snap: null, link: link.id, ov };
   missingNotes.site_b = unmappedNote(link);
   siteState.freq_ov = null;
@@ -401,7 +432,8 @@ function unitsChanged() {
 
 function setupTracking(key) {
   const fs = siteFieldset(key);
-  const tracked = (el) => ["name", "lat", "lon", "position", "height", "height_ref", "ground"].includes(el.name);
+  const tracked = (el) => ["name", "lat", "lon", "position", "height", "height_ref", "ground",
+    "tx_power", "noise"].includes(el.name);
   fs.addEventListener("input", (ev) => { if (tracked(ev.target)) syncOverrides(key); });
   fs.addEventListener("change", (ev) => {
     if (!tracked(ev.target)) return;
@@ -776,7 +808,7 @@ function fromUrl() {
     for (const [short, name] of Object.entries(URL_FIELDS)) {
       if (!p.has(`${pre}_${short}`)) continue;
       const raw = p.get(`${pre}_${short}`);
-      if (name.endsWith("_m")) {
+      if (name.endsWith("_m") || name === "tx_power_dbm" || name === "noise_dbm") {
         if (raw !== "" && Number.isFinite(Number(raw))) s.ov[name] = Number(raw);
       } else if (raw !== "") {
         s.ov[name] = raw;
