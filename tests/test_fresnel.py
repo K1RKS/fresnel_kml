@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from fresnelkml import fresnel
@@ -43,3 +45,31 @@ def test_endpoints_have_zero_radius():
 
 def test_second_zone_is_sqrt2_larger():
     assert fresnel.zone_radius(5000, 5000, LAM, 2) == pytest.approx(fresnel.zone_radius(5000, 5000, LAM) * 2 ** 0.5)
+
+
+def test_equal_heights_look_down():
+    # Each end looks below level by about half the subtended angle, D / (2R).
+    d = 10_000
+    drop = math.degrees(d / (2 * fresnel.EARTH_RADIUS_M))
+    ab, ba = fresnel.path_tilt(d, 0.0, 0.0)
+    assert ab == pytest.approx(-drop, abs=1e-4)
+    assert ba == pytest.approx(ab)
+    assert ab == pytest.approx(-0.0450, abs=1e-3)
+
+
+def test_higher_far_end_is_uptilt():
+    # 100 m rise over 10 km, minus the ~7.8 m the earth drops away.
+    d, rise = 10_000.0, 100.0
+    drop = d / (2 * fresnel.EARTH_RADIUS_M)
+    ab, ba = fresnel.path_tilt(d, 0.0, rise)
+    assert ab == pytest.approx(math.degrees(math.atan2(rise, d) - drop), abs=1e-3)
+    assert ba == pytest.approx(math.degrees(math.atan2(-rise, d) - drop), abs=1e-3)
+    assert ab == pytest.approx(0.528, abs=0.002)
+    assert ba == pytest.approx(-0.618, abs=0.002)
+
+
+def test_tilt_swaps_when_the_ends_swap():
+    ab, ba = fresnel.path_tilt(8_000, 40.0, 5.0)
+    swapped_ab, swapped_ba = fresnel.path_tilt(8_000, 5.0, 40.0)
+    assert ab == pytest.approx(swapped_ba)
+    assert ba == pytest.approx(swapped_ab)

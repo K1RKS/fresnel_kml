@@ -169,6 +169,32 @@ function aimRow(r, picks) {
   return lines.length ? ["Antenna aim", lines.join("<br>")] : null;
 }
 
+// Positive degrees are up from the local horizon, along the straight line to the other antenna.
+function tiltPhrase(deg) {
+  const shown = Math.abs(deg).toFixed(2);
+  if (shown === "0.00") return "level";
+  return `${shown}\u00b0 ${deg > 0 ? "up" : "down"}`;
+}
+
+function tiltRow(r, picks) {
+  const tilts = [r.tilt_ab, r.tilt_ba];
+  const lines = [`A\u2192B ${tiltPhrase(tilts[0])}, B\u2192A ${tiltPhrase(tilts[1])}`];
+  r.sites.forEach((s, i) => {
+    const node = picks[i];
+    if (!node || node.elevation_deg === null || node.elevation_deg === undefined) return;
+    const set = Number(node.elevation_deg);
+    const off = set - tilts[i];
+    const offShown = Math.abs(off).toFixed(2);
+    const where = offShown === "0.00" ? "matches" : `${offShown}\u00b0 ${off > 0 ? "high" : "low"}`;
+    let text = `${esc(s.name)} is set ${tiltPhrase(set)}, link ${tiltPhrase(tilts[i])} (${where})`;
+    const bw = node.beamwidth_deg;
+    const narrow = bw !== null && bw !== undefined && bw > 0 && bw < 360;
+    if (narrow && Math.abs(off) > bw / 2) text = `<span class="aim-off">${text}, outside the beam</span>`;
+    lines.push(text);
+  });
+  return ["Up/down tilt", lines.join("<br>")];
+}
+
 function readSite(key) {
   const fs = siteFieldset(key);
   const site = { name: $("input[name=name]", fs).value.trim() };
@@ -314,6 +340,7 @@ function showResult(data, units, picks = [], feedHeights = []) {
   }
   rows.push(["Distance", dfmt(r.distance_m)]);
   rows.push(["Bearings", `A\u2192B ${r.bearing_ab.toFixed(1)}\u00b0, B\u2192A ${r.bearing_ba.toFixed(1)}\u00b0`]);
+  rows.push(tiltRow(r, picks));
   const aim = aimRow(r, picks);
   if (aim) rows.push(aim);
   rows.push(["Max r1 / 0.6\u00b7r1", `${hfmt(r.r1_max_m, 2)} / ${hfmt(r.r60_max_m, 2)}`]);

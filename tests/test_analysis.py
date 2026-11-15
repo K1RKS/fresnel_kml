@@ -100,6 +100,19 @@ def test_close_up_window_shrinks_on_short_links(fake_chain):
     assert r.end_window_m == pytest.approx(r.distance_m / 2)
 
 
+def test_tilt_follows_the_antenna_heights(fake_chain):
+    level = flat_link(10, fake_chain)
+    assert level.tilt_ab == pytest.approx(level.tilt_ba)
+    assert level.tilt_ab < 0  # equal heights: both antennas look slightly below level
+    chain, _ = fake_chain(lambda lat, lon: 0.0)
+    higher = analyze(Site("A", 0, 0, agl_m=10), Site("B", 0, TEN_KM_LON, agl_m=110), elevation=chain)
+    assert higher.tilt_ab > 0.4
+    assert higher.tilt_ba < -0.4
+    data = higher.to_dict()
+    assert data["tilt_ab"] == round(higher.tilt_ab, 3)
+    assert data["tilt_ba"] == round(higher.tilt_ba, 3)
+
+
 def test_report_dict_is_json_ready(fake_chain):
     import json
     r = flat_link(10, fake_chain)

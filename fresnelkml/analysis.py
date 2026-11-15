@@ -124,6 +124,8 @@ class LinkReport:
     distance_m: float
     bearing_ab: float
     bearing_ba: float
+    tilt_ab: float  # degrees above the local horizontal, A looking toward B; positive is up
+    tilt_ba: float
     zone_max_m: float
     r1_max_m: float
     r60_max_m: float
@@ -234,6 +236,8 @@ class LinkReport:
             "distance_m": _r(self.distance_m),
             "bearing_ab": round(self.bearing_ab, 2),
             "bearing_ba": round(self.bearing_ba, 2),
+            "tilt_ab": round(self.tilt_ab, 3),
+            "tilt_ba": round(self.tilt_ba, 3),
             "zone_max_m": _r(self.zone_max_m, 3),
             "r1_max_m": _r(self.r1_max_m, 3),
             "r60_max_m": _r(self.r60_max_m, 3),
@@ -648,9 +652,11 @@ def analyze(site_a: Site, site_b: Site, options: Options | None = None, *, eleva
         r1 = fresnel.zone_radius(d1, d2, lam, 1)
         stations.append(MeshStation(p.t, p.lat, p.lon, p.bearing, los, r_n, CLEAR_RATIO * r1))
 
+    tilt_ab, tilt_ba = fresnel.path_tilt(distance, ra.asl_m, rb.asl_m)
     report = LinkReport(
         site_a=ra, site_b=rb, options=opt, freq_hz=opt.freq_ghz * 1e9, wavelength_m=lam,
         distance_m=distance, bearing_ab=bearing_ab, bearing_ba=bearing_ba,
+        tilt_ab=tilt_ab, tilt_ba=tilt_ba,
         zone_max_m=fresnel.max_radius(distance, lam, opt.zone),
         r1_max_m=fresnel.max_radius(distance, lam, 1),
         r60_max_m=CLEAR_RATIO * fresnel.max_radius(distance, lam, 1),

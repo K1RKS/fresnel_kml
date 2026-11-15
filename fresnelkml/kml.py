@@ -10,7 +10,7 @@ from . import geo
 from .analysis import CLEAR_RATIO, LinkReport, MeshStation, Options, Site, analyze
 from .coords import format_position
 from .surface import dataset_label, flown_text
-from .units import fmt_distance, fmt_gap, fmt_height
+from .units import fmt_distance, fmt_gap, fmt_height, fmt_tilt
 
 KML_NS = "http://www.opengis.net/kml/2.2"
 GX_NS = "http://www.google.com/kml/ext/2.2"
@@ -96,6 +96,7 @@ def _link_description(report: LinkReport) -> str:
         f"Frequency: {opt.freq_ghz:g} GHz (\u03bb = {report.wavelength_m:.7f} m)",
         f"Distance: {fmt_distance(report.distance_m, u)}",
         f"Bearing A\u2192B: {report.bearing_ab:.1f}\u00b0, B\u2192A: {report.bearing_ba:.1f}\u00b0",
+        f"Tilt A\u2192B: {fmt_tilt(report.tilt_ab)}, B\u2192A: {fmt_tilt(report.tilt_ba)}",
     ]
     if opt.zone != 1:
         lines.append(f"Max r{opt.zone}: {fmt_height(report.zone_max_m, u, 2)}")

@@ -14,7 +14,7 @@ from .elevation import ElevationChain, ElevationUnavailable
 from .kml import render_kml
 from .parsing import FEET, RequestError, parse_site_string, read_sites_csv
 from .surface import dataset_label, flown_text
-from .units import MILE, fmt_distance, fmt_gap, fmt_height
+from .units import MILE, fmt_distance, fmt_gap, fmt_height, fmt_tilt
 from .webapi import safe_filename
 
 EXIT_INPUT = 2
@@ -145,6 +145,7 @@ def summary(report: LinkReport) -> str:
         *rows,
         f"  Distance {fmt_distance(report.distance_m, u)}, bearing A->B {report.bearing_ab:.1f} deg, "
         f"B->A {report.bearing_ba:.1f} deg",
+        f"  Tilt A->B {fmt_tilt(report.tilt_ab)}, B->A {fmt_tilt(report.tilt_ba)}",
         f"  Max r1 {fmt_height(report.r1_max_m, u, 2)}, 0.6*r1 {fmt_height(report.r60_max_m, u, 2)}"
         + (f", max r{opt.zone} {fmt_height(report.zone_max_m, u, 2)}" if opt.zone != 1 else ""),
         f"  Zone color {report.zone_color.hex} ({'random' if report.zone_color.random else 'chosen'})",

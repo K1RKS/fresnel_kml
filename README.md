@@ -67,7 +67,7 @@ Under each site's heights, "Ground here (lookup)" shows what the elevation looku
 
 The page remembers the mode, the picks, your changes and the "Along the path" settings in this browser, so a reload brings them back (re-checked against the fresh feed; a node that has left the feed keeps its saved values with a note). "Copy link to these sites" copies a URL with the same choices, for sharing or bookmarking; opening it applies them and tidies the address bar.
 
-For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The server fetches the feeds itself, rechecks them every minute (an empty `304` while the poller hasn't published a new scan), and warns when the mesh data is more than an hour old; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
+For picked nodes that report an antenna azimuth, the result adds an "Antenna aim" row comparing it with the link bearing. It's flagged when the link is outside half the antenna's beamwidth. The result also shows the up/down tilt of the straight line from each antenna to the other, above or below level (earth curvature included, no refraction). When a picked node reports an antenna elevation, that row compares the setting with the tilt the link needs, and flags it the same way. The server fetches the feeds itself, rechecks them every minute (an empty `304` while the poller hasn't published a new scan), and warns when the mesh data is more than an hour old; see [deploy/INSTALL.md](deploy/INSTALL.md) to change or turn off the feeds.
 
 ### Map
 

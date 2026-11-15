@@ -24,6 +24,14 @@ def fmt_gap(metres: float, units: str = "m", what: str = "terrain") -> str:
     return f"{what} {fmt_height(abs(metres), units)} {where} the line of sight"
 
 
+def fmt_tilt(degrees: float) -> str:
+    """Up or down from level. Positive degrees are up; a tilt under 0.005° reads as level."""
+    shown = f"{abs(degrees):.2f}"
+    if shown == "0.00":
+        return "level"
+    return f"{shown}\u00b0 {'up' if degrees > 0 else 'down'}"
+
+
 def fmt_distance(metres: float, units: str = "m", digits: int = 3) -> str:
     """Short distances in m or ft, longer ones in km or miles."""
     if units == "ft":

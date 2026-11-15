@@ -6,7 +6,7 @@ import pytest
 
 from fresnelkml import Options, Site, analyze, render_kml
 from fresnelkml.cli import summary
-from fresnelkml.units import fmt_distance, fmt_gap, fmt_height
+from fresnelkml.units import fmt_distance, fmt_gap, fmt_height, fmt_tilt
 from fresnelkml.webapi import handle_request
 
 NS = {"k": "http://www.opengis.net/kml/2.2"}
@@ -18,6 +18,13 @@ NS = {"k": "http://www.opengis.net/kml/2.2"}
 ])
 def test_fmt_distance(metres, units, expected):
     assert fmt_distance(metres, units) == expected
+
+
+def test_fmt_tilt():
+    assert fmt_tilt(0.528) == "0.53\u00b0 up"
+    assert fmt_tilt(-0.618) == "0.62\u00b0 down"
+    assert fmt_tilt(0.004) == "level"
+    assert fmt_tilt(-0.004) == "level"
 
 
 def test_fmt_height_and_gap():
